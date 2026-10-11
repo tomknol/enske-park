@@ -66,9 +66,9 @@ function zoneKey(zoneRaw: string | undefined, layer: "paid" | "permit"): string 
 }
 
 function labelTextColor(layer: "paid" | "permit", label: string): string {
-  if (layer === "permit") return "#1e40af";
-  if (label === "1" || label === "1B") return "#b91c1c";
-  return "#b45309";
+  if (layer === "permit") return "#9bb8e8";
+  if (label === "1" || label === "1B") return "#d48996";
+  return "#c9a066";
 }
 
 /** One large label per municipal zone polygon (centroid), not merged across features. */

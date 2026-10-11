@@ -216,9 +216,9 @@ export function EnskeParkApp() {
     }
     if (sheet.type === "info") {
       return {
-        title: "Over EnsKe Park",
+        title: "Over Enske Park",
         body: [
-          "EnsKe Park combineert openbare parkeerdata van de gemeente Enschede en RDW met je huidige locatie. Borden en aanwijzingen op straat zijn altijd leidend.",
+          "Enske Park combineert openbare parkeerdata van de gemeente Enschede en RDW met je huidige locatie. Borden en aanwijzingen op straat zijn altijd leidend.",
           zonesMeta
             ? `Zonekaart: ${zonesMeta.source} (geladen ${format(new Date(zonesMeta.fetchedAt), "dd-MM-yyyy HH:mm")})`
             : "",

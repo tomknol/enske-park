@@ -12,7 +12,7 @@ import {
   type PaidZoneId,
 } from "@/lib/tariffs";
 import { cn } from "@/lib/utils";
-import { zoneFillColor, zoneLineColor } from "@/lib/zones";
+import { zoneBadgeTokens } from "@/lib/zones";
 
 type ParkingStatusIslandProps = {
   snapshot: ParkingSnapshot;
@@ -78,13 +78,10 @@ export function ParkingStatusIsland({
     );
   }
 
-  const badgeStyle =
+  const badgeTokens =
     code != null && (locationKind === "paid" || locationKind === "permit")
-      ? {
-          backgroundColor: zoneFillColor(zoneRaw, locationKind === "permit" ? "permit" : "paid"),
-          borderColor: zoneLineColor(zoneRaw, locationKind === "permit" ? "permit" : "paid"),
-        }
-      : undefined;
+      ? zoneBadgeTokens(zoneRaw, locationKind === "permit" ? "permit" : "paid")
+      : null;
 
   const secondaryLine = (() => {
     if (geoPending && zonesLoading) return null;
@@ -107,38 +104,36 @@ export function ParkingStatusIsland({
   const primaryMain = (() => {
     if (zonesLoading || geoPending) {
       return (
-        <span className="text-[1.0625rem] font-semibold text-[var(--map-text-muted)]">
-          Locatie bepalen…
-        </span>
+        <span className="text-lg font-medium text-[var(--map-text-muted)]">Locatie bepalen…</span>
       );
     }
     if (locationKind === "outside" || (!snapshot.zone && locationKind !== "permit")) {
       return (
-        <span className="text-[1.0625rem] font-semibold tracking-tight text-[var(--map-text)]">
+        <span className="text-lg font-semibold tracking-tight text-[var(--map-text)]">
           Geen betaalzone
         </span>
       );
     }
     if (locationKind === "permit") {
       return (
-        <span className="text-[1.0625rem] font-semibold tracking-tight text-[var(--map-text)]">
+        <span className="text-lg font-semibold tracking-tight text-[var(--map-text)]">
           Vergunninghouders
         </span>
       );
     }
     if (!snapshot.isPaidNow) {
       return (
-        <span className="text-[1.375rem] font-bold tracking-tight text-emerald-700">Gratis</span>
+        <span className="text-[1.5rem] font-bold tracking-tight text-emerald-300/95">Gratis</span>
       );
     }
     if (snapshot.hourlyEur != null) {
       return (
         <span className="flex items-baseline gap-1 tabular-nums">
-          <span className="text-base font-semibold text-[var(--map-text-muted)]">€</span>
-          <span className="text-[1.375rem] font-bold leading-none tracking-tight text-[var(--map-text)]">
+          <span className="text-base font-medium text-[var(--map-text-secondary)]">€</span>
+          <span className="text-[1.5rem] font-bold leading-none tracking-tight text-[var(--map-text)]">
             {formatEuro(snapshot.hourlyEur)}
           </span>
-          <span className="text-sm font-medium text-[var(--map-text-muted)]">/ uur</span>
+          <span className="text-sm font-medium text-[var(--map-text-secondary)]">/ uur</span>
         </span>
       );
     }
@@ -155,52 +150,50 @@ export function ParkingStatusIsland({
   return (
     <div className="pointer-events-auto mx-auto w-[calc(100%-24px)] max-w-[420px]">
       <div
-        className={cn("map-island overflow-hidden transition-[box-shadow] duration-200", expanded && "map-island--expanded")}
+        className={cn("map-island overflow-hidden", expanded && "map-island--expanded")}
       >
         <button
           type="button"
-          className="flex w-full flex-col gap-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--map-accent)]/30"
+          className="flex w-full flex-col text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--map-accent)]/35"
           aria-expanded={expanded}
           onClick={() => setExpanded((e) => !e)}
         >
-          <div className="flex items-center justify-between gap-2 px-4 pb-1 pt-3">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--map-text-muted)]">
-              EnsKe Park
+          <div className="flex items-center justify-between gap-2 px-4 pb-0 pt-3">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--map-text-muted)]">
+              Enske Park
             </span>
-            <div className="flex items-center gap-1">
-              <span
-                className={cn(
-                  "flex h-6 w-6 items-center justify-center rounded-full text-[var(--map-text-muted)] transition-transform duration-200",
-                  expanded && "rotate-180",
-                )}
-                aria-hidden
-              >
-                <ChevronDown className="h-4 w-4" strokeWidth={2} />
-              </span>
-            </div>
+            <ChevronDown
+              className={cn(
+                "h-4 w-4 text-[var(--map-text-muted)] transition-transform duration-200",
+                expanded && "rotate-180",
+              )}
+              strokeWidth={2}
+              aria-hidden
+            />
           </div>
 
-          <div className="flex items-start gap-3 px-4 pb-3 pt-1">
-            {code != null && !zonesLoading && !geoPending && (
-              <div
-                className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] border text-sm font-bold tabular-nums text-[var(--map-text)]"
-                style={badgeStyle}
-                aria-hidden
-              >
-                {code}
-              </div>
-            )}
-
-            <div className="min-w-0 flex-1">
-              <div key={contentKey} className="map-island-fade">
-                {primaryMain}
-              </div>
-              {secondaryLine && (
-                <p className="mt-1 text-[13px] leading-snug text-[var(--map-text-secondary)]">
-                  {secondaryLine}
-                </p>
+          <div className="px-4 pb-3 pt-2">
+            <div key={contentKey} className="map-island-fade flex flex-wrap items-center gap-2">
+              {code != null && !zonesLoading && !geoPending && badgeTokens && (
+                <span
+                  className="map-zone-badge shrink-0"
+                  style={{
+                    backgroundColor: badgeTokens.background,
+                    borderColor: badgeTokens.border,
+                    color: badgeTokens.color,
+                  }}
+                  aria-hidden
+                >
+                  {code}
+                </span>
               )}
+              <div className="min-w-0 flex-1">{primaryMain}</div>
             </div>
+            {secondaryLine && (
+              <p className="mt-1.5 text-[13px] leading-snug text-[var(--map-text-secondary)]">
+                {secondaryLine}
+              </p>
+            )}
           </div>
         </button>
 
@@ -211,7 +204,7 @@ export function ParkingStatusIsland({
           )}
         >
           <div className="min-h-0 overflow-hidden">
-            <div className="border-t border-[var(--map-border)] px-4 pb-4 pt-3 text-[13px] leading-relaxed text-[var(--map-text-secondary)]">
+            <div className="border-t border-[var(--liquid-border)] px-4 pb-4 pt-3 text-[13px] leading-relaxed text-[var(--map-text-secondary)]">
               {expandedDetails && snapshot.zone && (
                 <p className="font-medium text-[var(--map-text)]">
                   {formatZoneLabel(snapshot.zone)}
@@ -234,7 +227,7 @@ export function ParkingStatusIsland({
                 <p className="mt-1">Parkeren is hier voorbehouden aan vergunninghouders.</p>
               )}
               {(germanHoliday || busyUpgrade) && (
-                <p className="mt-2 text-amber-900">
+                <p className="mt-2 text-amber-200/90">
                   {busyUpgrade
                     ? "Zeer druk in het centrum — meerdere garages bijna vol."
                     : "Duitse feestdag — extra drukte verwacht."}
@@ -245,7 +238,7 @@ export function ParkingStatusIsland({
               </p>
               <button
                 type="button"
-                className="map-text-button mt-3 inline-flex items-center gap-1.5 text-[13px] font-medium text-[var(--map-accent)]"
+                className="map-text-button mt-3 inline-flex items-center gap-1.5 text-[13px] font-medium"
                 onClick={(e) => {
                   e.stopPropagation();
                   onInfo();

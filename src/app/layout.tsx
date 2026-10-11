@@ -9,18 +9,18 @@ const dmSans = DM_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "EnsKe Park – Parkeertarieven Enschede",
+  title: "Enske Park – Parkeertarieven Enschede",
   description:
     "Wat kost parkeren waar je nu bent in Enschede? Live zonekaart, tarieven en garagebezetting.",
-  applicationName: "EnsKe Park",
+  applicationName: "Enske Park",
   metadataBase: new URL("https://enske-park.vercel.app"),
   openGraph: {
-    title: "EnsKe Park – Parkeertarieven Enschede",
+    title: "Enske Park – Parkeertarieven Enschede",
     description:
       "Mobiele parkeerutility voor Enschede: zone, tarief en garagebezetting op de kaart.",
     type: "website",
     locale: "nl_NL",
-    siteName: "EnsKe Park",
+    siteName: "Enske Park",
   },
   icons: {
     icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
@@ -32,7 +32,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#f1f5f9",
+  themeColor: "#080b10",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

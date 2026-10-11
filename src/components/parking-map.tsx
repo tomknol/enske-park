@@ -20,6 +20,7 @@ import {
 } from "@/lib/zones";
 import { formatGarageMarkerLabel, type GarageOccupancyLevel } from "@/lib/garages";
 import { FREE_PARKING_SPOTS } from "@/lib/free-parking";
+import { MAP_STYLE_URL } from "@/lib/map-theme";
 import type { GeoPosition } from "@/hooks/use-geolocation";
 
 export type GarageMarkerData = {
@@ -53,14 +54,19 @@ type ParkingMapProps = {
 };
 
 const DEFAULT_CENTER: [number, number] = [6.8937, 52.2215];
-const MAP_STYLE =
-  process.env.NEXT_PUBLIC_MAP_STYLE_URL ??
-  "https://tiles.openfreemap.org/styles/liberty";
 const MAPLIBRE_WORKER_URL =
   "https://cdn.jsdelivr.net/npm/maplibre-gl@6.13.0/dist/maplibre-gl-worker.mjs";
 
 /** Keep the map strictly 2D / north-up top view. */
 const FLAT_CAMERA = { pitch: 0, bearing: 0 } as const;
+
+const ZONE_LABEL_HALO_COLOR = "rgba(12, 16, 24, 0.55)";
+const ZONE_LABEL_HALO_WIDTH: ExpressionSpecification = [
+  "case",
+  ["boolean", ["get", "emphasized"], false],
+  2.8,
+  2.2,
+];
 
 function applyFlatMapStyle(map: MaplibreMap) {
   const style = map.getStyle();
@@ -68,6 +74,27 @@ function applyFlatMapStyle(map: MaplibreMap) {
   for (const layer of style.layers) {
     if (layer.type === "fill-extrusion") {
       map.setLayoutProperty(layer.id, "visibility", "none");
+    }
+  }
+}
+
+/** Slightly mute non-parking basemap detail so zones and markers stand out. */
+function applyParkingFocusBasemap(map: MaplibreMap) {
+  const style = map.getStyle();
+  if (!style?.layers) return;
+
+  for (const layer of style.layers) {
+    const id = layer.id.toLowerCase();
+    if (layer.type === "symbol") {
+      const isPoi = id.includes("poi") || id.includes("amenity") || id.includes("shop");
+      if (isPoi) {
+        try {
+          map.setPaintProperty(layer.id, "text-opacity", 0.35);
+          map.setPaintProperty(layer.id, "icon-opacity", 0.25);
+        } catch {
+          /* layer may not expose these paints */
+        }
+      }
     }
   }
 }
@@ -90,18 +117,11 @@ const ZONE_LABEL_SIZE: ExpressionSpecification = [
   ["case", ["boolean", ["get", "emphasized"], false], 58, 48],
 ];
 
-const ZONE_LABEL_HALO_WIDTH: ExpressionSpecification = [
-  "case",
-  ["boolean", ["get", "emphasized"], false],
-  3.5,
-  2.8,
-];
-
 const ZONE_LABEL_OPACITY: ExpressionSpecification = [
   "case",
   ["boolean", ["get", "emphasized"], false],
-  0.78,
-  0.55,
+  0.88,
+  0.62,
 ];
 
 const GARAGE_COUNT_MIN_ZOOM = 14.25;
@@ -135,7 +155,7 @@ function applyZoneLabelLayerStyle(map: MaplibreMap) {
   map.setLayoutProperty("zone-labels", "text-optional", false);
   map.setLayoutProperty("zone-labels", "text-size", ZONE_LABEL_SIZE);
   map.setPaintProperty("zone-labels", "text-color", ["get", "textColor"]);
-  map.setPaintProperty("zone-labels", "text-halo-color", "rgba(255, 255, 255, 0.95)");
+  map.setPaintProperty("zone-labels", "text-halo-color", ZONE_LABEL_HALO_COLOR);
   map.setPaintProperty("zone-labels", "text-halo-width", ZONE_LABEL_HALO_WIDTH);
   map.setPaintProperty("zone-labels", "text-opacity", ZONE_LABEL_OPACITY);
 }
@@ -243,7 +263,7 @@ export function ParkingMap({
 
     const map = new MaplibreMap({
       container: containerRef.current,
-      style: MAP_STYLE,
+      style: MAP_STYLE_URL,
       center: DEFAULT_CENTER,
       zoom: 14,
       attributionControl: { compact: true },
@@ -277,7 +297,10 @@ export function ParkingMap({
     map.on("load", onZoom);
 
     map.touchZoomRotate.disableRotation();
-    map.on("load", () => applyFlatMapStyle(map));
+    map.on("load", () => {
+      applyFlatMapStyle(map);
+      applyParkingFocusBasemap(map);
+    });
     map.on("pitch", () => {
       if (map.getPitch() !== 0) map.setPitch(0);
     });
@@ -319,7 +342,7 @@ export function ParkingMap({
             source: id,
             paint: {
               "fill-color": ["get", "fill"],
-              "fill-opacity": 0.32,
+              "fill-opacity": 0.38,
             },
           });
           map.addLayer({
@@ -365,7 +388,7 @@ export function ParkingMap({
           },
           paint: {
             "text-color": ["get", "textColor"],
-            "text-halo-color": "rgba(255, 255, 255, 0.95)",
+            "text-halo-color": ZONE_LABEL_HALO_COLOR,
             "text-halo-width": ZONE_LABEL_HALO_WIDTH,
             "text-opacity": ZONE_LABEL_OPACITY,
           },
@@ -470,7 +493,7 @@ export function ParkingMap({
           type: "fill",
           source: accuracySourceId,
           filter: ["==", ["geometry-type"], "Polygon"],
-          paint: { "fill-color": "#2563eb", "fill-opacity": 0.14 },
+          paint: { "fill-color": "#3b82f6", "fill-opacity": 0.18 },
         });
         map.addLayer({
           id: "user-accuracy-point",

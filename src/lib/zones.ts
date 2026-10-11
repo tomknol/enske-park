@@ -150,15 +150,42 @@ export function zoneDisplayName(zoneRaw: string | null): string {
 }
 
 export function zoneFillColor(zoneRaw: string | null, layer: "paid" | "permit"): string {
-  if (layer === "permit") return "rgba(37, 99, 235, 0.14)";
+  if (layer === "permit") return "rgba(71, 112, 182, 0.28)";
   const z = normalizeZoneId(zoneRaw);
-  if (z === "1" || z === "1B") return "rgba(220, 38, 38, 0.16)";
-  return "rgba(245, 158, 11, 0.15)";
+  if (z === "1" || z === "1B") return "rgba(127, 45, 58, 0.32)";
+  return "rgba(146, 98, 52, 0.28)";
 }
 
 export function zoneLineColor(zoneRaw: string | null, layer: "paid" | "permit"): string {
-  if (layer === "permit") return "rgba(29, 78, 216, 0.55)";
+  if (layer === "permit") return "rgba(125, 168, 230, 0.55)";
   const z = normalizeZoneId(zoneRaw);
-  if (z === "1" || z === "1B") return "rgba(185, 28, 28, 0.6)";
-  return "rgba(217, 119, 6, 0.55)";
+  if (z === "1" || z === "1B") return "rgba(196, 106, 118, 0.62)";
+  return "rgba(196, 142, 78, 0.58)";
+}
+
+/** Island zone badge on dark liquid surfaces */
+export function zoneBadgeTokens(
+  zoneRaw: string | null,
+  layer: "paid" | "permit",
+): { background: string; border: string; color: string } {
+  if (layer === "permit") {
+    return {
+      background: "rgba(59, 130, 246, 0.18)",
+      border: "rgba(147, 197, 253, 0.28)",
+      color: "#cbd5e1",
+    };
+  }
+  const z = normalizeZoneId(zoneRaw);
+  if (z === "1" || z === "1B") {
+    return {
+      background: "rgba(190, 75, 90, 0.16)",
+      border: "rgba(228, 140, 150, 0.28)",
+      color: "#fecdd3",
+    };
+  }
+  return {
+    background: "rgba(180, 120, 60, 0.16)",
+    border: "rgba(214, 162, 98, 0.28)",
+    color: "#fde68a",
+  };
 }

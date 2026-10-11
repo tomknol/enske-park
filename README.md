@@ -1,4 +1,4 @@
-# EnsKe Park
+# Enske Park
 
 Mobile-first parking utility for Enschede — zone, current street tariff, RDW garage occupancy, and curated free-parking suggestions on a full-screen map.
 
