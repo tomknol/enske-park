@@ -5,8 +5,9 @@ export default function Home() {
   return (
     <Suspense
       fallback={
-        <div className="flex h-[100dvh] items-center justify-center bg-slate-100 text-sm text-slate-600">
-          Kaart laden…
+        <div className="app-boot h-[100dvh]">
+          <div className="app-boot-spinner" role="status" aria-label="Laden" />
+          <p className="app-boot-mark">ENSKE PARK</p>
         </div>
       }
     >

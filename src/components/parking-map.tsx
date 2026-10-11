@@ -49,9 +49,12 @@ type ParkingMapProps = {
   }) => void;
   onGarageSelect: (garage: GarageMarkerData) => void;
   onFreeSelect: (spotId: string) => void;
+  onMapBackgroundClick: () => void;
   recenterToken: number;
   activeZoneLabelKey: string | null;
 };
+
+const ZONE_CLICK_LAYERS = ["paid-zones-fill", "permit-zones-fill"] as const;
 
 const DEFAULT_CENTER: [number, number] = [6.8937, 52.2215];
 const MAPLIBRE_WORKER_URL =
@@ -87,13 +90,17 @@ function applyParkingFocusBasemap(map: MaplibreMap) {
     const id = layer.id.toLowerCase();
     if (layer.type === "symbol") {
       const isPoi = id.includes("poi") || id.includes("amenity") || id.includes("shop");
-      if (isPoi) {
-        try {
-          map.setPaintProperty(layer.id, "text-opacity", 0.35);
-          map.setPaintProperty(layer.id, "icon-opacity", 0.25);
-        } catch {
-          /* layer may not expose these paints */
+      const isRoadLabel =
+        id.includes("road") || id.includes("street") || id.includes("highway");
+      try {
+        if (isPoi) {
+          map.setPaintProperty(layer.id, "text-opacity", 0.32);
+          map.setPaintProperty(layer.id, "icon-opacity", 0.22);
+        } else if (isRoadLabel) {
+          map.setPaintProperty(layer.id, "text-opacity", 0.55);
         }
+      } catch {
+        /* layer may not expose these paints */
       }
     }
   }
@@ -195,6 +202,7 @@ export function ParkingMap({
   onZoneSelect,
   onGarageSelect,
   onFreeSelect,
+  onMapBackgroundClick,
   recenterToken,
   activeZoneLabelKey,
 }: ParkingMapProps) {
@@ -212,7 +220,9 @@ export function ParkingMap({
   const onZoneSelectRef = useRef(onZoneSelect);
   const onGarageSelectRef = useRef(onGarageSelect);
   const onFreeSelectRef = useRef(onFreeSelect);
+  const onMapBackgroundClickRef = useRef(onMapBackgroundClick);
   const activeZoneLabelKeyRef = useRef(activeZoneLabelKey);
+  const mapBackgroundClickBound = useRef(false);
   const garagesVisualKeyRef = useRef("");
   const garageMarkerElsRef = useRef<Map<string, HTMLButtonElement>>(new Map());
   const garageByIdRef = useRef<Map<string, GarageMarkerData>>(new Map());
@@ -224,12 +234,14 @@ export function ParkingMap({
     onZoneSelectRef.current = onZoneSelect;
     onGarageSelectRef.current = onGarageSelect;
     onFreeSelectRef.current = onFreeSelect;
+    onMapBackgroundClickRef.current = onMapBackgroundClick;
     activeZoneLabelKeyRef.current = activeZoneLabelKey;
   }, [
     onUserMovedMap,
     onZoneSelect,
     onGarageSelect,
     onFreeSelect,
+    onMapBackgroundClick,
     activeZoneLabelKey,
   ]);
 
@@ -342,7 +354,7 @@ export function ParkingMap({
             source: id,
             paint: {
               "fill-color": ["get", "fill"],
-              "fill-opacity": 0.38,
+              "fill-opacity": 0.22,
             },
           });
           map.addLayer({
@@ -351,7 +363,7 @@ export function ParkingMap({
             source: id,
             paint: {
               "line-color": ["get", "line"],
-              "line-width": 1,
+              "line-width": 1.25,
             },
           });
         }
@@ -427,6 +439,17 @@ export function ParkingMap({
           map.getCanvas().style.cursor = "";
         });
       }
+
+      if (!mapBackgroundClickBound.current) {
+        mapBackgroundClickBound.current = true;
+        map.on("click", (e) => {
+          const layers = ZONE_CLICK_LAYERS.filter((id) => map.getLayer(id));
+          if (layers.length === 0) return;
+          const hits = map.queryRenderedFeatures(e.point, { layers: [...layers] });
+          if (hits.length > 0) return;
+          onMapBackgroundClickRef.current();
+        });
+      }
     };
 
     if (map.isStyleLoaded()) apply();
@@ -493,7 +516,7 @@ export function ParkingMap({
           type: "fill",
           source: accuracySourceId,
           filter: ["==", ["geometry-type"], "Polygon"],
-          paint: { "fill-color": "#3b82f6", "fill-opacity": 0.18 },
+          paint: { "fill-color": "#6eb0ff", "fill-opacity": 0.16 },
         });
         map.addLayer({
           id: "user-accuracy-point",
