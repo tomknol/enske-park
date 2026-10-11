@@ -11,13 +11,13 @@ const dmSans = DM_Sans({
 export const metadata: Metadata = {
   title: "Enske Park – Parkeertarieven Enschede",
   description:
-    "Wat kost parkeren waar je nu bent in Enschede? Live zonekaart, tarieven en garagebezetting.",
+    "Wat kost parkeren waar je nu bent in Enschede? Live zonekaart en tarieven.",
   applicationName: "Enske Park",
   metadataBase: new URL("https://enske-park.vercel.app"),
   openGraph: {
     title: "Enske Park – Parkeertarieven Enschede",
     description:
-      "Mobiele parkeerutility voor Enschede: zone, tarief en garagebezetting op de kaart.",
+      "Mobiele parkeerutility voor Enschede: zone en tarief op de kaart.",
     type: "website",
     locale: "nl_NL",
     siteName: "Enske Park",

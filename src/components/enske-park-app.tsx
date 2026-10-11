@@ -4,7 +4,6 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toZonedTime } from "date-fns-tz";
 import { Crosshair, Info } from "lucide-react";
-import type { GarageMarkerData } from "@/components/parking-map";
 import {
   ParkingContextPanel,
   type SelectedMapFeature,
@@ -31,8 +30,6 @@ export function EnskeParkApp() {
   const [zones, setZones] = useState<ZoneCollections | null>(null);
   const [zonesLoading, setZonesLoading] = useState(true);
   const [zonesError, setZonesError] = useState(false);
-
-  const [garages, setGarages] = useState<GarageMarkerData[]>([]);
 
   const [followUser, setFollowUser] = useState(true);
   const [recenterToken, setRecenterToken] = useState(0);
@@ -71,30 +68,10 @@ export function EnskeParkApp() {
     }
   }, []);
 
-  const loadGarages = useCallback(async () => {
-    try {
-      const res = await fetch("/api/garages", { cache: "no-store" });
-      if (!res.ok) return;
-      const data = await res.json();
-      setGarages(data.garages);
-    } catch {
-      /* garages fail independently */
-    }
-  }, []);
-
   useEffect(() => {
     const t = window.setTimeout(() => void loadZones(), 0);
     return () => window.clearTimeout(t);
   }, [loadZones]);
-
-  useEffect(() => {
-    const boot = window.setTimeout(() => void loadGarages(), 0);
-    const id = window.setInterval(() => void loadGarages(), 60_000);
-    return () => {
-      window.clearTimeout(boot);
-      window.clearInterval(id);
-    };
-  }, [loadGarages]);
 
   const position = geoState.status === "ready" ? geoState.position : null;
   const geoPending = geoState.status === "pending";
@@ -137,12 +114,6 @@ export function EnskeParkApp() {
   const amsterdamToday = toZonedTime(clock ?? new Date(0), "Europe/Amsterdam");
   const germanHoliday = isRelevantGermanHoliday(amsterdamToday);
 
-  const liveGarages = garages.filter((g) => g.live);
-  const nearlyFullCount = liveGarages.filter(
-    (g) => g.level === "full" || g.level === "busy",
-  ).length;
-  const busyUpgrade = germanHoliday && nearlyFullCount >= 2;
-
   const clearSelection = useCallback(() => setSelectedMapFeature(null), []);
 
   const handleUserMovedMap = useCallback(() => setFollowUser(false), []);
@@ -160,10 +131,8 @@ export function EnskeParkApp() {
     },
     [],
   );
-  const handleGarageSelect = useCallback((garage: GarageMarkerData) => {
-    setSelectedMapFeature({ type: "garage", garage });
-  }, []);
   const handleMapBackgroundClick = useCallback(() => {
+    setHoveredZone(null);
     setSelectedMapFeature((current) => (current ? null : current));
   }, []);
 
@@ -182,9 +151,7 @@ export function EnskeParkApp() {
         position={position}
         followUser={followUser}
         onUserMovedMap={handleUserMovedMap}
-        garages={garages}
         onZoneSelect={handleZoneSelect}
-        onGarageSelect={handleGarageSelect}
         onMapBackgroundClick={handleMapBackgroundClick}
         recenterToken={recenterToken}
         activeZoneLabelKey={currentZoneLabelKey}
@@ -210,12 +177,39 @@ export function EnskeParkApp() {
           }
           onRetryGeo={retryGeo}
           germanHoliday={germanHoliday}
-          busyUpgrade={busyUpgrade}
           selected={selectedMapFeature}
           hoveredZone={hoveredZone}
           onClearSelection={clearSelection}
           clock={clock ?? undefined}
         />
+      </div>
+
+      <div
+        className="map-attribution pointer-events-none absolute z-10"
+        style={{
+          left: "max(8px, env(safe-area-inset-left))",
+          bottom: "max(4px, env(safe-area-inset-bottom))",
+        }}
+      >
+        <p className="map-attribution-text">
+          <a
+            className="map-attribution-link"
+            href="https://www.openstreetmap.org/copyright"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            © OpenStreetMap
+          </a>
+          {" · "}
+          <a
+            className="map-attribution-link"
+            href="https://openfreemap.org"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            OpenFreeMap
+          </a>
+        </p>
       </div>
 
       <div

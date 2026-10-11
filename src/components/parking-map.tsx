@@ -33,35 +33,19 @@ import {
   type ZoneSourceId,
   type ZoneStateTarget,
 } from "@/lib/zone-map-highlight";
-import { formatGarageMarkerLabel, type GarageOccupancyLevel } from "@/lib/garages";
 import { MAP_STYLE_URL } from "@/lib/map-theme";
 import type { GeoPosition } from "@/hooks/use-geolocation";
-
-export type GarageMarkerData = {
-  id: string;
-  label: string;
-  shortLabel: string;
-  lat: number | null;
-  lon: number | null;
-  vacant: number | null;
-  capacity: number | null;
-  live: boolean;
-  level: GarageOccupancyLevel;
-  lastUpdated: number | null;
-};
 
 type ParkingMapProps = {
   zones: ZoneCollections | null;
   position: GeoPosition | null;
   followUser: boolean;
   onUserMovedMap: () => void;
-  garages: GarageMarkerData[];
   onZoneSelect: (payload: {
     kind: "paid" | "permit";
     zoneRaw: string | null;
     gebiedCod: string | null;
   }) => void;
-  onGarageSelect: (garage: GarageMarkerData) => void;
   onMapBackgroundClick: () => void;
   recenterToken: number;
   /** Stable GPS zone (`paid:4`, `permit:…`) — drives current-zone emphasis. */
@@ -179,34 +163,6 @@ const PAID_ZONE_LABEL_HALO_WIDTH: ExpressionSpecification = [
 const PERMIT_ZONE_LABEL_OPACITY = 0.42;
 
 const ZONE_LABEL_HALO_COLOR_ACTIVE = "rgba(255, 255, 255, 0.16)";
-
-const GARAGE_COUNT_MIN_ZOOM = 14.5;
-
-function syncGarageMarkerAppearance(el: HTMLButtonElement, g: GarageMarkerData, zoom: number) {
-  const zoomedIn = zoom >= GARAGE_COUNT_MIN_ZOOM;
-  const showFull = zoomedIn && g.live && g.level === "full";
-  const showCount =
-    zoomedIn && g.live && g.vacant != null && g.level !== "full";
-  el.className = [
-    "garage-map-marker",
-    showCount || showFull ? "" : "garage-map-marker--compact",
-    showFull ? "garage-map-marker--full" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  el.textContent = showFull ? "P VOL" : showCount ? `P ${g.vacant}` : "P";
-  el.setAttribute(
-    "aria-label",
-    `${g.label}, ${g.live ? formatGarageMarkerLabel(g.level, g.vacant) : "Live bezetting onbekend"}`,
-  );
-}
-
-function createGarageMarkerElement(g: GarageMarkerData, zoom: number): HTMLButtonElement {
-  const el = document.createElement("button");
-  el.type = "button";
-  syncGarageMarkerAppearance(el, g, zoom);
-  return el;
-}
 
 function stylePaidZoneLabels(map: MaplibreMap) {
   const id = "zone-labels-paid";
@@ -452,9 +408,7 @@ export function ParkingMap({
   position,
   followUser,
   onUserMovedMap,
-  garages,
   onZoneSelect,
-  onGarageSelect,
   onMapBackgroundClick,
   recenterToken,
   activeZoneLabelKey,
@@ -463,7 +417,6 @@ export function ParkingMap({
 }: ParkingMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MaplibreMap | null>(null);
-  const garageMarkersRef = useRef<Marker[]>([]);
   const userMarkerRef = useRef<Marker | null>(null);
   const accuracySourceId = "user-accuracy";
   const zoneHandlersBound = useRef(false);
@@ -472,7 +425,6 @@ export function ParkingMap({
   const zonesAppliedRef = useRef<ZoneCollections | null>(null);
   const onUserMovedMapRef = useRef(onUserMovedMap);
   const onZoneSelectRef = useRef(onZoneSelect);
-  const onGarageSelectRef = useRef(onGarageSelect);
   const onMapBackgroundClickRef = useRef(onMapBackgroundClick);
   const onZoneHoverChangeRef = useRef(onZoneHoverChange);
   const activeZoneLabelKeyRef = useRef(activeZoneLabelKey);
@@ -482,15 +434,9 @@ export function ParkingMap({
   const labelBaseRef = useRef<FeatureCollection | null>(null);
   const zoneHoverHandlersBound = useRef(false);
   const mapBackgroundClickBound = useRef(false);
-  const garagesVisualKeyRef = useRef("");
-  const garageMarkerElsRef = useRef<Map<string, HTMLButtonElement>>(new Map());
-  const garageByIdRef = useRef<Map<string, GarageMarkerData>>(new Map());
-  const mapZoomRef = useRef(14);
-
   useEffect(() => {
     onUserMovedMapRef.current = onUserMovedMap;
     onZoneSelectRef.current = onZoneSelect;
-    onGarageSelectRef.current = onGarageSelect;
     onMapBackgroundClickRef.current = onMapBackgroundClick;
     onZoneHoverChangeRef.current = onZoneHoverChange;
     activeZoneLabelKeyRef.current = activeZoneLabelKey;
@@ -498,7 +444,6 @@ export function ParkingMap({
   }, [
     onUserMovedMap,
     onZoneSelect,
-    onGarageSelect,
     onMapBackgroundClick,
     onZoneHoverChange,
     activeZoneLabelKey,
@@ -554,7 +499,7 @@ export function ParkingMap({
       style: MAP_STYLE_URL,
       center: DEFAULT_CENTER,
       zoom: 14,
-      attributionControl: { compact: true },
+      attributionControl: false,
       ...FLAT_CAMERA,
       maxPitch: 0,
       minPitch: 0,
@@ -570,16 +515,6 @@ export function ParkingMap({
       );
     }
 
-    const onZoom = () => {
-      mapZoomRef.current = map.getZoom();
-      garageMarkerElsRef.current.forEach((el, id) => {
-        const g = garageByIdRef.current.get(id);
-        if (g) syncGarageMarkerAppearance(el, g, mapZoomRef.current);
-      });
-    };
-    map.on("zoom", onZoom);
-    map.on("load", onZoom);
-
     map.touchZoomRotate.disableRotation();
     map.on("load", () => {
       applyFlatMapStyle(map);
@@ -589,12 +524,14 @@ export function ParkingMap({
       if (map.getPitch() !== 0) map.setPitch(0);
     });
 
-    map.on("dragstart", () => onUserMovedMapRef.current());
+    map.on("dragstart", () => {
+      onUserMovedMapRef.current();
+      setHoveredZoneKey(map, null);
+    });
 
     mapRef.current = map;
 
     return () => {
-      map.off("zoom", onZoom);
       map.remove();
       mapRef.current = null;
       zoneHandlersBound.current = false;
@@ -711,6 +648,7 @@ export function ParkingMap({
           if (layers.length === 0) return;
           const hits = map.queryRenderedFeatures(e.point, { layers: [...layers] });
           if (hits.length > 0) return;
+          setHoveredZoneKey(map, null);
           onMapBackgroundClickRef.current();
         });
       }
@@ -821,41 +759,6 @@ export function ParkingMap({
       });
     }
   }, [followUser, position, recenterToken]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    const visualKey = garages
-      .map((g) => `${g.id}:${g.live}:${g.level}:${g.vacant ?? "x"}`)
-      .join("|");
-    if (visualKey === garagesVisualKeyRef.current) return;
-    garagesVisualKeyRef.current = visualKey;
-
-    garageMarkersRef.current.forEach((m) => m.remove());
-    garageMarkersRef.current = [];
-    garageMarkerElsRef.current.clear();
-    garageByIdRef.current.clear();
-
-    garages.forEach((g) => {
-      if (g.lat == null || g.lon == null) return;
-      const el = createGarageMarkerElement(g, mapZoomRef.current);
-      garageMarkerElsRef.current.set(g.id, el);
-      garageByIdRef.current.set(g.id, g);
-
-      const marker = new Marker({ element: el, anchor: "center" })
-        .setLngLat([g.lon, g.lat])
-        .addTo(map);
-      const openGarage = (ev: Event) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        onGarageSelectRef.current(g);
-      };
-      el.addEventListener("click", openGarage);
-      el.addEventListener("touchend", openGarage, { passive: false });
-      garageMarkersRef.current.push(marker);
-    });
-  }, [garages]);
 
   return (
     <div

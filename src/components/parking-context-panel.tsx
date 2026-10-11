@@ -1,16 +1,13 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { format } from "date-fns";
 import { X } from "lucide-react";
-import type { GarageMarkerData } from "@/components/parking-map";
 import type { LocationKind, ParkingSnapshot } from "@/lib/parking-status";
 import { resolveParkingAtLocation } from "@/lib/parking-status";
 import { formatEuro, paidScheduleForZone, type PaidZoneId } from "@/lib/tariffs";
 
 export type SelectedMapFeature =
   | { type: "zone"; kind: "paid" | "permit"; zoneRaw: string | null }
-  | { type: "garage"; garage: GarageMarkerData }
   | { type: "info" };
 
 type ParkingContextPanelProps = {
@@ -25,7 +22,6 @@ type ParkingContextPanelProps = {
   geoUnavailableMessage: string | null;
   onRetryGeo: () => void;
   germanHoliday: boolean;
-  busyUpgrade: boolean;
   selected: SelectedMapFeature | null;
   /** Desktop: zone under cursor — temporary preview in the top module. */
   hoveredZone: { kind: "paid" | "permit"; zoneRaw: string | null } | null;
@@ -122,7 +118,6 @@ function liveSecondary(
   geoPending: boolean,
   zonesLoading: boolean,
   germanHoliday: boolean,
-  busyUpgrade: boolean,
 ): string {
   if (geoPending || zonesLoading) return "Locatie bepalen…";
   const parts: string[] = [];
@@ -136,8 +131,7 @@ function liveSecondary(
   } else {
     parts.push("Borden op straat zijn leidend");
   }
-  if (busyUpgrade) parts.push("Extra druk in centrum");
-  else if (germanHoliday) parts.push("Duitse feestdag — drukker");
+  if (germanHoliday) parts.push("Duitse feestdag — drukker");
   return parts.join(" · ");
 }
 
@@ -149,7 +143,6 @@ function parkingModuleCells(
   geoPending: boolean,
   zonesLoading: boolean,
   germanHoliday: boolean,
-  busyUpgrade: boolean,
 ): ModuleCells {
   if (geoPending || zonesLoading) {
     return {
@@ -173,7 +166,6 @@ function parkingModuleCells(
       geoPending,
       zonesLoading,
       germanHoliday,
-      busyUpgrade,
     ),
     tone: panelToneFromParking(kind, snapshot, false),
   };
@@ -228,7 +220,6 @@ export function ParkingContextPanel({
   geoUnavailableMessage,
   onRetryGeo,
   germanHoliday,
-  busyUpgrade,
   selected,
   hoveredZone,
   onClearSelection,
@@ -276,7 +267,6 @@ export function ParkingContextPanel({
       false,
       false,
       false,
-      false,
     );
     cells.secondary =
       snap.isPaidNow && kind === "paid"
@@ -311,7 +301,6 @@ export function ParkingContextPanel({
       false,
       false,
       false,
-      false,
     );
     cells.secondary =
       snap.isPaidNow && kind === "paid"
@@ -323,33 +312,6 @@ export function ParkingContextPanel({
     return <StatusModule {...cells} onClear={onClearSelection} />;
   }
 
-  if (selected?.type === "garage") {
-    const g = selected.garage;
-    const left =
-      g.lastUpdated && g.live
-        ? format(new Date(g.lastUpdated), "HH:mm")
-        : g.capacity
-          ? `${g.capacity.toLocaleString("nl-NL")} pl.`
-          : "—";
-    const center = g.shortLabel.toUpperCase();
-    const right =
-      g.live && g.vacant != null ? `${g.vacant.toLocaleString("nl-NL")} vrij` : "—";
-    const secondary =
-      g.live && g.vacant != null
-        ? "Garage · live bezetting"
-        : "Garage · bezetting onbekend";
-
-    return (
-      <StatusModule
-        left={left}
-        center={center}
-        right={right}
-        secondary={secondary}
-        onClear={onClearSelection}
-      />
-    );
-  }
-
   const cells = parkingModuleCells(
     locationKind,
     snapshot,
@@ -358,7 +320,6 @@ export function ParkingContextPanel({
     geoPending,
     zonesLoading,
     germanHoliday,
-    busyUpgrade,
   );
 
   return <StatusModule {...cells} />;

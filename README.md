@@ -1,6 +1,6 @@
 # Enske Park
 
-Mobiele parkeerutility voor Enschede: volledige kaart, live parkeerstatus op basis van je locatie, zone-tarieven en RDW-garagebezetting.
+Mobiele parkeerutility voor Enschede: volledige kaart, live parkeerstatus op basis van je locatie en zone-tarieven.
 
 **Productie:** [enske-park.vercel.app](https://enske-park.vercel.app)
 
@@ -16,7 +16,6 @@ Geen accounts, geen database. Alle persoonlijke locatiegegevens blijven in de br
 - Kaart is strikt **2D**: geen kanteling, geen rotatie, noord boven.
 - **Betaalzones** (gemeente) als gekleurde vlakken; **vergunningzones** apart gestyled.
 - **Zone-nummers** op de kaart (groot, leesbaar); de zone waar je nu in staat wordt visueel benadrukt zodra locatie bekend is.
-- **Garages** (centrum Enschede): compacte blauwe **P**-markers; bij inzoomen en live RDW-data toont de marker **P {aantal vrij}** of **P VOL**.
 - **Desktop:** zoomknoppen rechtsonder. **Mobiel:** pinchen en slepen.
 - Knop **Naar mijn locatie** (rechtsonder): centreert de kaart opnieuw op GPS en hervat “volgen” na handmatig verschuiven.
 
@@ -26,13 +25,13 @@ Eén compact, donker paneel — de enige informatielaag boven de kaart.
 
 **Standaard:** je **huidige** parkeersituatie (GPS + zone + tarief), typografie-gedreven (zone-label, groot tarief/status, kleine secundaire regel).
 
-**Geselecteerd:** tik op een zone of garage → hetzelfde paneel toont details van die keuze. Sluiten via ✕ of tik op leeg kaartgebied → terug naar je locatiestatus (GPS-logica blijft ongewijzigd).
+**Geselecteerd:** tik op een zone → hetzelfde paneel toont details van die keuze. Sluiten via ✕ of tik op leeg kaartgebied → terug naar je locatiestatus (GPS-logica blijft ongewijzigd).
 
 **Desktop:** beweeg de muis over een zone → het paneel toont een tijdelijke preview (“Zone onder de muis”) zonder je GPS-highlight te vervangen.
 
 | Actie | Resultaat |
 | --- | --- |
-| Tik op **zone / garage** | Detail in het statuspaneel |
+| Tik op **zone** | Detail in het statuspaneel |
 | Tik op **leeg kaartgebied** | Selectie wissen |
 | **Info-knop** (rechtsonder) | Korte “Over Enske Park”-tekst in het paneel |
 
@@ -58,23 +57,15 @@ Logica staat in `src/lib/tariffs.ts` (handmatig bijwerken bij nieuwe tariefjaren
 
 - Tijdzone: **Europe/Amsterdam**.
 - **Nederlandse** feestdagen: gratis parkeren volgens `holidays-nl.ts`.
-- **Duitse** feestdagen (NRW / Nedersaksen, relevant voor grensregio): `holidays-de.ts` — o.a. hint wanneer garages druk kunnen zijn op Duitse feestdagen.
+- **Duitse** feestdagen (NRW / Nedersaksen, relevant voor grensregio): `holidays-de.ts` — hint in het statuspaneel op Duitse feestdagen.
 
 ### Server-API’s (Next.js Route Handlers)
 
 | Route | Functie | Cache |
 | --- | --- | --- |
 | `GET /api/zones` | Haalt ArcGIS-lagen op (vergunning + betaald), levert GeoJSON | ~1 uur revalidate |
-| `GET /api/garages` | RDW NPR static + dynamic per bekende garage | Geen cache (live) |
 
-De client pollt garages ongeveer elke **60 seconden**; zones worden bij start (en na fout opnieuw) geladen.
-
-Garages in de app:
-
-- H.J. van Heekgarage  
-- Irenegarage  
-- Parkeergarage Mooienhof  
-- Q-Park Stationsplein (geen live dynamic via RDW in deze app)
+Zones worden bij start (en na fout opnieuw) geladen.
 
 ---
 
@@ -105,8 +96,7 @@ src/
 │   ├── globals.css           # Design tokens, kaart/sheet/island styling
 │   ├── vaul-drawer.css       # Drawer-animaties (lokaal i.p.v. vaul npm CSS)
 │   └── api/
-│       ├── zones/route.ts    # Proxy + normalisatie gemeente GeoJSON
-│       └── garages/route.ts  # RDW aggregatie
+│       └── zones/route.ts    # Proxy + normalisatie gemeente GeoJSON
 ├── components/
 │   ├── enske-park-app.tsx       # Shell: data, selectedMapFeature, kaart
 │   ├── parking-context-panel.tsx # Enkel statuspaneel (locatie + selectie)
@@ -120,7 +110,6 @@ src/
     ├── parking-status.ts     # “Betaald nu?” + sheet-teksten
     ├── zones.ts              # Polygon lookup, kleuren
     ├── zone-labels.ts        # Labelpunten & nadruk huidige zone
-    ├── garages.ts            # RDW-id’s, bezettingsniveaus
     ├── zone-map-highlight.ts # Feature-state: current / hover / selected
     ├── holidays-nl.ts / holidays-de.ts
     └── map-theme.ts          # Standaard style-URL
@@ -134,7 +123,7 @@ public/
 
 - GPS-coördinaten worden **niet** naar deze app-server gestuurd.
 - Alleen de browser vraagt locatie aan; zone-bepaling gebeurt client-side met lokaal opgehaalde polygonen.
-- Server-aanroepen gaan naar **gemeente ArcGIS** en **RDW** (zones/garages), niet naar een eigen user-API.
+- Server-aanroepen gaan naar **gemeente ArcGIS** (zones), niet naar een eigen user-API.
 
 ---
 
@@ -184,14 +173,11 @@ Na deploy: metadata en `metadataBase` wijzen naar `https://enske-park.vercel.app
 
 1. **Nieuwe parkeertarieven / tijden:** pas `src/lib/tariffs.ts` aan (`TARIFF_YEAR`, bedragen, schema’s).
 2. **Andere kaartstijl:** zet `NEXT_PUBLIC_MAP_STYLE_URL` (lokaal en op Vercel).
-3. **Garage toevoegen:** uitbreiden `ENSCHEDE_CENTRAL_GARAGES` in `src/lib/garages.ts` met RDW-facility-id.
-
 ---
 
 ## Externe databronnen
 
 - **Parkeer- en vergunningzones:** [Gemeente Enschede ArcGIS MapServer](https://geoportaal.enschede.nl/arcgis/rest/services/Parkeren_Parkeervergunningzones/MapServer) (lagen 0 en 1)
-- **Garagebezetting:** [RDW NPR Open Data v2](https://npropendata.rdw.nl/parkingdata/v2/)
 - **Basiskaart:** [OpenFreeMap](https://openfreemap.org/) (standaard dark style; © OpenMapTiles / OpenStreetMap via attributie op kaart)
 
 **Disclaimer:** Enske Park is een hulpmiddel op basis van open data. **Borden, bordjes en officiële aanwijzingen ter plaatse zijn altijd leidend.**
