@@ -41,7 +41,7 @@ export type ParkingSnapshot = {
 
 export type StatusPanelTone = "paid" | "free" | "permit" | "neutral";
 export type StatusPanelRightMode = "rate" | "free" | "permit";
-export type StatusPanelContext = "live" | "hover" | "selected" | "destination";
+export type StatusPanelContext = "live" | "hover" | "selected" | "destination" | "point";
 
 export type StatusPanelColumns = {
   left: string;
@@ -283,6 +283,7 @@ export function composePanelSecondary(input: {
   if (input.context === "hover") parts.push("Zone onder muis");
   if (input.context === "selected") parts.push("Geselecteerde zone");
   if (input.context === "destination") parts.push("Bestemming");
+  if (input.context === "point") parts.push("Geselecteerde locatie");
   parts.push(input.fact);
   for (const extra of input.extras ?? []) {
     if (extra) parts.push(extra);

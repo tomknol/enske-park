@@ -107,6 +107,12 @@ describe("status panel columns", () => {
     expect(
       composePanelSecondary({ context: "selected", fact: "Betaald parkeren" }),
     ).toBe("Geselecteerde zone · Betaald parkeren");
+    expect(
+      composePanelSecondary({
+        context: "point",
+        fact: "Volgens gemeentelijke zonekaart",
+      }),
+    ).toBe("Geselecteerde locatie · Volgens gemeentelijke zonekaart");
     expect(columns.right).toBe("GRATIS");
     expect(columns.left).toBe("vanaf morgen 09:00");
   });

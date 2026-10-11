@@ -32,13 +32,14 @@ Het paneel houdt altijd dezelfde kolommen:
 | --- | --- |
 | **Live GPS** | Standaard, zonder prefix |
 | **Zone** | Tik op zone · secundair “Geselecteerde zone · …” + ✕ |
+| **Punt buiten zone** | Tik op leeg kaartgebied · “Geselecteerde locatie · …” + ✕ |
 | **Hover** | Desktop, tijdelijk · secundair “Zone onder muis · …” (geen ✕) |
 | **Bestemming** | Zoek icoon → adres → gele pin · “Bestemming · …” |
 | **Garage** | Tik op **P**-marker (RDW, live indien beschikbaar) |
 | **P+R Zuiderval** | Tik op **P+R**-marker + Route-link |
 | **Info** | Info-knop |
 
-Leeg kaartgebied of ✕ → terug naar live GPS. Hover verlaat de zone → terug naar live GPS.
+✕ of de locatieknop → terug naar live GPS. Hover verlaat de zone → terug naar live GPS.
 
 ### Kaartlagen (visuele prioriteit)
 

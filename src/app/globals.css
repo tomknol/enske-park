@@ -92,6 +92,11 @@ body {
   box-shadow: var(--panel-shadow);
 }
 
+/* Keep GRATIS / € /u clear of the dismiss control without shrinking the time column. */
+.park-panel:has(.park-panel-close) .park-module-col--right {
+  padding-right: 28px;
+}
+
 .park-panel::before {
   content: "";
   position: absolute;
@@ -236,7 +241,7 @@ body {
   text-align: center;
   font-size: 0.6875rem;
   line-height: 1.35;
-  color: var(--map-text-muted);
+  color: var(--map-text-secondary);
   letter-spacing: 0.01em;
 }
 

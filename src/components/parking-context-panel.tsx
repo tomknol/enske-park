@@ -261,7 +261,7 @@ export function ParkingContextPanel(props: ParkingContextPanelProps) {
     const cells = parkingModuleCells(
       snap,
       clock,
-      "live",
+      "point",
       false,
       germanHoliday,
       busyUpgrade,
