@@ -14,25 +14,31 @@ Kaart-first: één donker **statuspaneel** bovenin. Geen bottom sheets of modale
 
 ### Live status (GPS)
 
-- Zone + tarief + tijd (`tot …` / `vanaf …`)
-- **Countdown** in gratis betaalzones (rechts, per seconde)
+Het paneel houdt altijd dezelfde kolommen:
+
+| Links | Midden | Rechts |
+| --- | --- | --- |
+| wanneer de staat wijzigt (`tot …` / `vanaf …` / `—` / `24/7`) | welke zone of locatie | wat **nu** geldt (`€ …/u` / `GRATIS` / `VERGUNNING`) |
+
+- **Countdown** staat in de secundaire regel (`Nog … gratis`), nooit in de rechterkolom
+- Buiten elke betaalzone: `— · GEEN BETAALZONE · GRATIS` — geen toekomstige starttijd
 - **Max. parkeertijd** op straat (waar gemapt), bijv. `MAX. 30 MIN.` op Stationsplein
 - Tik op **€ …/u** → compacte **kosteninschatting** (+1/+2/+3 u, tot 18:00), met `±` en waarschuwing bij overschrijding max. duur
+- Borden ter plaatse blijven leidend (info-paneel)
 
 ### Context in hetzelfde paneel
 
 | Context | Hoe |
 | --- | --- |
-| **Live GPS** | Standaard |
-| **Zone** | Tik op zone op de kaart |
-| **Bestemming** | Zoek icoon → adres → gele pin; label “Bestemming” |
+| **Live GPS** | Standaard, zonder prefix |
+| **Zone** | Tik op zone · secundair “Geselecteerde zone · …” + ✕ |
+| **Hover** | Desktop, tijdelijk · secundair “Zone onder muis · …” (geen ✕) |
+| **Bestemming** | Zoek icoon → adres → gele pin · “Bestemming · …” |
 | **Garage** | Tik op **P**-marker (RDW, live indien beschikbaar) |
 | **P+R Zuiderval** | Tik op **P+R**-marker + Route-link |
 | **Info** | Info-knop |
 
-Leeg kaartgebied of ✕ → terug naar live GPS.
-
-**Desktop:** hover over zone = tijdelijke preview (zonder GPS-highlight te vervangen).
+Leeg kaartgebied of ✕ → terug naar live GPS. Hover verlaat de zone → terug naar live GPS.
 
 ### Kaartlagen (visuele prioriteit)
 
