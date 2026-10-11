@@ -1,6 +1,16 @@
-import { getYear, isSameDay } from "date-fns";
+import { addDays, getYear, isSameDay, isSunday } from "date-fns";
 
-/** Movable Dutch holidays where normal paid street parking does not apply. */
+/** Enschede street parking treatment on Dutch public holidays (Europe/Amsterdam calendar dates). */
+export type NlHolidayKind = "full_free" | "sunday_schedule";
+
+export type NlHoliday = {
+  date: Date;
+  kind: NlHolidayKind;
+  id: string;
+  label: string;
+};
+
+/** Anonymous Gregorian Easter Sunday (Meeus/Jones/Butcher). */
 export function easterSunday(year: number): Date {
   const a = year % 19;
   const b = Math.floor(year / 100);
@@ -19,20 +29,99 @@ export function easterSunday(year: number): Date {
   return new Date(year, month - 1, day);
 }
 
-export function isNlFreeParkingHoliday(date: Date): boolean {
-  const y = getYear(date);
-  const easter = easterSunday(y);
-  const candidates = [
-    new Date(y, 0, 1),
-    easter,
-    addDays(easter, 49),
-    new Date(y, 11, 25),
-  ];
-  return candidates.some((d) => isSameDay(d, date));
+function koningsdag(year: number): Date {
+  const apr27 = new Date(year, 3, 27);
+  if (isSunday(apr27)) return new Date(year, 3, 26);
+  return apr27;
 }
 
-function addDays(d: Date, days: number): Date {
-  const n = new Date(d);
-  n.setDate(n.getDate() + days);
-  return n;
+function bevrijdingsdag(year: number): Date {
+  return new Date(year, 4, 5);
+}
+
+/** All Enschede-relevant Dutch holidays for a calendar year. */
+export function nlHolidaysForYear(year: number): NlHoliday[] {
+  const easter = easterSunday(year);
+  return [
+    { id: "nieuwjaar", label: "Nieuwjaarsdag", date: new Date(year, 0, 1), kind: "full_free" },
+    { id: "pasen-1", label: "Eerste Paasdag", date: easter, kind: "full_free" },
+    {
+      id: "goede-vrijdag",
+      label: "Goede Vrijdag",
+      date: addDays(easter, -2),
+      kind: "sunday_schedule",
+    },
+    {
+      id: "pasen-2",
+      label: "Tweede Paasdag",
+      date: addDays(easter, 1),
+      kind: "sunday_schedule",
+    },
+    {
+      id: "koningsdag",
+      label: "Koningsdag",
+      date: koningsdag(year),
+      kind: "sunday_schedule",
+    },
+    {
+      id: "bevrijdingsdag",
+      label: "Bevrijdingsdag",
+      date: bevrijdingsdag(year),
+      kind: "sunday_schedule",
+    },
+    {
+      id: "hemelvaart",
+      label: "Hemelvaartsdag",
+      date: addDays(easter, 39),
+      kind: "sunday_schedule",
+    },
+    {
+      id: "pinksteren-1",
+      label: "Eerste Pinksterdag",
+      date: addDays(easter, 49),
+      kind: "full_free",
+    },
+    {
+      id: "pinksteren-2",
+      label: "Tweede Pinksterdag",
+      date: addDays(easter, 50),
+      kind: "sunday_schedule",
+    },
+    {
+      id: "kerst-1",
+      label: "Eerste Kerstdag",
+      date: new Date(year, 11, 25),
+      kind: "full_free",
+    },
+    {
+      id: "kerst-2",
+      label: "Tweede Kerstdag",
+      date: new Date(year, 11, 26),
+      kind: "sunday_schedule",
+    },
+  ];
+}
+
+export function classifyNlHoliday(date: Date): NlHoliday | null {
+  const y = getYear(date);
+  for (const h of nlHolidaysForYear(y)) {
+    if (isSameDay(h.date, date)) return h;
+  }
+  return null;
+}
+
+/** Entire day free — no paid street parking schedule applies. */
+export function isNlFullyFreeParkingDay(date: Date): boolean {
+  return classifyNlHoliday(date)?.kind === "full_free";
+}
+
+/** Use Sunday paid-window times (ma–za schema does not apply). */
+export function usesNlSundayParkingSchedule(date: Date): boolean {
+  if (isSunday(date)) return true;
+  return classifyNlHoliday(date)?.kind === "sunday_schedule";
+}
+
+/** @deprecated Use {@link isNlFullyFreeParkingDay}. */
+export function isNlFreeParkingHoliday(date: Date): boolean {
+  return isNlFullyFreeParkingDay(date);
 }

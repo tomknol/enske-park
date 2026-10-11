@@ -1,7 +1,13 @@
-import { addDays, format, isSunday, set } from "date-fns";
+import { addDays, format } from "date-fns";
 import { nl } from "date-fns/locale";
-import { toZonedTime } from "date-fns-tz";
-import { isNlFreeParkingHoliday } from "@/lib/holidays-nl";
+import {
+  amsterdamDate,
+  formatClockTime,
+  isWithinPaidWindow,
+  nextPaidEnd,
+  nextPaidStart,
+} from "@/lib/parking-schedule";
+import { isNlFullyFreeParkingDay } from "@/lib/holidays-nl";
 import {
   formatEuro,
   formatZoneLabel,
@@ -10,8 +16,6 @@ import {
   paidScheduleForZone,
   type PaidZoneId,
 } from "@/lib/tariffs";
-
-const TZ = "Europe/Amsterdam";
 
 export type LocationKind = "paid" | "permit" | "outside";
 
@@ -23,79 +27,16 @@ export type ParkingSnapshot = {
   headline: string;
   subline: string;
   nextChangeLabel: string | null;
+  /** When street parking is free in a paid zone: when paid rules start again (UTC ms). */
+  paidStartsAt: number | null;
 };
-
-function nowInAmsterdam(now = new Date()): Date {
-  return toZonedTime(now, TZ);
-}
-
-function minutesOfDay(hour: number, minute: number): number {
-  return hour * 60 + minute;
-}
-
-function isWithinPaidWindow(zone: PaidZoneId, date: Date): boolean {
-  const schedule = paidScheduleForZone(zone);
-  const slot = isSunday(date) ? schedule.sunday : schedule.weekday;
-  const nowMin = minutesOfDay(date.getHours(), date.getMinutes());
-  const start = minutesOfDay(slot.startHour, slot.startMinute);
-  const end = minutesOfDay(slot.endHour, slot.endMinute);
-  return nowMin >= start && nowMin < end;
-}
-
-function formatTime(h: number, m: number): string {
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
-function nextPaidStart(zone: PaidZoneId, from: Date): Date {
-  const schedule = paidScheduleForZone(zone);
-  for (let i = 0; i < 14; i++) {
-    const day = addDays(from, i === 0 ? 0 : 1);
-    const zoned = set(day, {
-      hours: 0,
-      minutes: 0,
-      seconds: 0,
-      milliseconds: 0,
-    });
-    if (isNlFreeParkingHoliday(zoned)) continue;
-    const slot = isSunday(zoned) ? schedule.sunday : schedule.weekday;
-    const start = set(zoned, {
-      hours: slot.startHour,
-      minutes: slot.startMinute,
-      seconds: 0,
-      milliseconds: 0,
-    });
-    if (i === 0 && from >= start) {
-      const end = set(zoned, {
-        hours: slot.endHour,
-        minutes: slot.endMinute,
-        seconds: 0,
-        milliseconds: 0,
-      });
-      if (from < end) return from;
-      continue;
-    }
-    if (i > 0 || from < start) return start;
-  }
-  return addDays(from, 1);
-}
-
-function nextPaidEnd(zone: PaidZoneId, from: Date): Date {
-  const schedule = paidScheduleForZone(zone);
-  const slot = isSunday(from) ? schedule.sunday : schedule.weekday;
-  return set(from, {
-    hours: slot.endHour,
-    minutes: slot.endMinute,
-    seconds: 0,
-    milliseconds: 0,
-  });
-}
 
 function naturalStartLabel(target: Date, now: Date): string {
   const sameDay =
     target.getFullYear() === now.getFullYear() &&
     target.getMonth() === now.getMonth() &&
     target.getDate() === now.getDate();
-  const time = formatTime(target.getHours(), target.getMinutes());
+  const time = formatClockTime(target.getHours(), target.getMinutes());
   if (sameDay) return time;
   const tomorrow = addDays(now, 1);
   const isTomorrow =
@@ -112,7 +53,7 @@ export function resolveParkingAtLocation(
   zoneRaw: string | null,
   now = new Date(),
 ): ParkingSnapshot {
-  const zonedNow = nowInAmsterdam(now);
+  const zonedNow = amsterdamDate(now);
 
   if (kind === "outside") {
     return {
@@ -123,6 +64,7 @@ export function resolveParkingAtLocation(
       headline: "GEEN BETAALZONE",
       subline: "Geen betaald parkeren volgens de gemeentelijke kaart",
       nextChangeLabel: null,
+      paidStartsAt: null,
     };
   }
 
@@ -136,6 +78,7 @@ export function resolveParkingAtLocation(
       headline: "Alleen vergunninghouders",
       subline: zone ? formatZoneLabel(zone) : "Vergunninghouders · 24/7",
       nextChangeLabel: null,
+      paidStartsAt: null,
     };
   }
 
@@ -149,10 +92,11 @@ export function resolveParkingAtLocation(
       headline: "GEEN BETAALZONE",
       subline: "Geen betaald parkeren volgens de gemeentelijke kaart",
       nextChangeLabel: null,
+      paidStartsAt: null,
     };
   }
 
-  if (isNlFreeParkingHoliday(zonedNow)) {
+  if (isNlFullyFreeParkingDay(zonedNow)) {
     const next = nextPaidStart(zone, zonedNow);
     return {
       kind: "paid",
@@ -162,6 +106,7 @@ export function resolveParkingAtLocation(
       headline: "NU GRATIS",
       subline: `${formatZoneLabel(zone)} · betaald parkeren vanaf ${naturalStartLabel(next, zonedNow)}`,
       nextChangeLabel: null,
+      paidStartsAt: next.getTime(),
     };
   }
 
@@ -176,8 +121,9 @@ export function resolveParkingAtLocation(
       isPaidNow: true,
       hourlyEur: rate,
       headline: `€ ${formatEuro(rate)} / uur`,
-      subline: `${formatZoneLabel(zone)} · betaald tot ${formatTime(end.getHours(), end.getMinutes())}`,
-      nextChangeLabel: `Gratis vanaf ${formatTime(end.getHours(), end.getMinutes())}`,
+      subline: `${formatZoneLabel(zone)} · betaald tot ${formatClockTime(end.getHours(), end.getMinutes())}`,
+      nextChangeLabel: `Gratis vanaf ${formatClockTime(end.getHours(), end.getMinutes())}`,
+      paidStartsAt: null,
     };
   }
 
@@ -190,7 +136,20 @@ export function resolveParkingAtLocation(
     headline: "NU GRATIS",
     subline: `${formatZoneLabel(zone)} · betaald parkeren vanaf ${naturalStartLabel(next, zonedNow)}`,
     nextChangeLabel: `Betaald vanaf ${naturalStartLabel(next, zonedNow)}`,
+    paidStartsAt: next.getTime(),
   };
+}
+
+/** Live countdown until paid street parking starts (paid zone, currently free). */
+export function formatCountdownToPaid(msRemaining: number): string {
+  const totalSec = Math.max(0, Math.floor(msRemaining / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  if (h > 0) return `${h}:${mm}:${ss}`;
+  return `${mm}:${ss}`;
 }
 
 export function zoneSheetDetails(
@@ -217,8 +176,8 @@ export function zoneSheetDetails(
       title: formatZoneLabel(snap.zone),
       lines: [
         `Tarief: € ${formatEuro(hourlyRateEur(snap.zone))} per uur`,
-        `Ma–za: ${formatTime(schedule.weekday.startHour, schedule.weekday.startMinute)}–${formatTime(schedule.weekday.endHour, schedule.weekday.endMinute)}`,
-        `Zo: ${formatTime(schedule.sunday.startHour, schedule.sunday.startMinute)}–${formatTime(schedule.sunday.endHour, schedule.sunday.endMinute)}`,
+        `Ma–za: ${formatClockTime(schedule.weekday.startHour, schedule.weekday.startMinute)}–${formatClockTime(schedule.weekday.endHour, schedule.weekday.endMinute)}`,
+        `Zo: ${formatClockTime(schedule.sunday.startHour, schedule.sunday.startMinute)}–${formatClockTime(schedule.sunday.endHour, schedule.sunday.endMinute)}`,
         snap.isPaidNow ? "Nu: betaald parkeren" : "Nu: gratis parkeren",
         snap.nextChangeLabel ?? "",
       ].filter(Boolean),

@@ -1,14 +1,18 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { format } from "date-fns";
 import { X } from "lucide-react";
+import { ParkingEstimator } from "@/components/parking-estimator";
+import type { DurationRestriction } from "@/lib/duration-restrictions";
 import type { LocationKind, ParkingSnapshot } from "@/lib/parking-status";
-import { resolveParkingAtLocation } from "@/lib/parking-status";
+import {
+  formatCountdownToPaid,
+  resolveParkingAtLocation,
+} from "@/lib/parking-status";
+import type { MapPanelContext } from "@/lib/panel-context";
+import { PNR_ZUIDERVAL } from "@/lib/pnr-zuiderval";
 import { formatEuro, paidScheduleForZone, type PaidZoneId } from "@/lib/tariffs";
-
-export type SelectedMapFeature =
-  | { type: "zone"; kind: "paid" | "permit"; zoneRaw: string | null }
-  | { type: "info" };
 
 type ParkingContextPanelProps = {
   snapshot: ParkingSnapshot;
@@ -22,11 +26,16 @@ type ParkingContextPanelProps = {
   geoUnavailableMessage: string | null;
   onRetryGeo: () => void;
   germanHoliday: boolean;
-  selected: SelectedMapFeature | null;
-  /** Desktop: zone under cursor — temporary preview in the top module. */
+  busyUpgrade: boolean;
+  mapContext: MapPanelContext | null;
   hoveredZone: { kind: "paid" | "permit"; zoneRaw: string | null } | null;
-  onClearSelection: () => void;
+  durationRestriction: DurationRestriction | null;
+  estimatorOpen: boolean;
+  onEstimatorOpenChange: (open: boolean) => void;
+  onClearContext: () => void;
   clock?: Date;
+  panelLon: number | null;
+  panelLat: number | null;
 };
 
 type PanelTone = "paid" | "free" | "permit" | "neutral" | "loading";
@@ -35,9 +44,12 @@ type ModuleCells = {
   left: string;
   center: string;
   right: string;
+  rightMode?: "rate" | "countdown" | "free" | "permit";
   secondary: string;
+  accent?: string | null;
   tone?: PanelTone;
   loading?: boolean;
+  rateTappable?: boolean;
 };
 
 function panelToneFromParking(
@@ -53,11 +65,12 @@ function panelToneFromParking(
   return "neutral";
 }
 
-function priceCellClass(right: string): string {
-  const base = "park-module-price tabular-nums";
-  if (right === "GRATIS") return `${base} park-module-price--free`;
-  if (right === "VERGUNNING") return `${base} park-module-price--permit`;
-  return base;
+function priceCellClass(mode: "rate" | "countdown" | "free" | "permit"): string {
+  if (mode === "countdown" || mode === "rate") {
+    return "park-module-time tabular-nums";
+  }
+  if (mode === "free") return "park-module-price park-module-price--free tabular-nums";
+  return "park-module-price park-module-price--permit tabular-nums";
 }
 
 function formatClockShort(h: number, m: number): string {
@@ -85,18 +98,26 @@ function zoneCenterLabel(
 function priceRight(
   kind: LocationKind | "outside",
   snapshot: ParkingSnapshot,
-): string {
-  if (kind === "outside" || (!snapshot.zone && kind !== "permit")) return "GRATIS";
-  if (kind === "permit") return "VERGUNNING";
-  if (!snapshot.isPaidNow) return "GRATIS";
-  if (snapshot.hourlyEur != null) return `€ ${formatEuro(snapshot.hourlyEur)}/u`;
-  return "—";
+  now?: Date,
+): { text: string; mode: "rate" | "countdown" | "free" | "permit" } {
+  if (kind === "outside" || (!snapshot.zone && kind !== "permit")) {
+    return { text: "GRATIS", mode: "free" };
+  }
+  if (kind === "permit") return { text: "VERGUNNING", mode: "permit" };
+  if (!snapshot.isPaidNow) {
+    if (snapshot.paidStartsAt != null && now) {
+      const ms = Math.max(0, snapshot.paidStartsAt - now.getTime());
+      return { text: formatCountdownToPaid(ms), mode: "countdown" };
+    }
+    return { text: "GRATIS", mode: "free" };
+  }
+  if (snapshot.hourlyEur != null) {
+    return { text: `€ ${formatEuro(snapshot.hourlyEur)}/u`, mode: "rate" };
+  }
+  return { text: "—", mode: "rate" };
 }
 
-function timeLeft(
-  kind: LocationKind | "outside",
-  snapshot: ParkingSnapshot,
-): string {
+function timeLeft(kind: LocationKind | "outside", snapshot: ParkingSnapshot): string {
   if (kind === "outside") return "—";
   if (kind === "permit") return "24/7";
   if (!snapshot.zone) return "—";
@@ -118,9 +139,12 @@ function liveSecondary(
   geoPending: boolean,
   zonesLoading: boolean,
   germanHoliday: boolean,
+  busyUpgrade: boolean,
+  prefix?: string,
 ): string {
   if (geoPending || zonesLoading) return "Locatie bepalen…";
   const parts: string[] = [];
+  if (prefix) parts.push(prefix);
   if (nearBoundary) parts.push("Dicht bij zonegrens");
   else if (locationKind === "outside" || (!snapshot.zone && locationKind !== "permit")) {
     parts.push("Geen betaald parkeren volgens de kaart");
@@ -131,7 +155,8 @@ function liveSecondary(
   } else {
     parts.push("Borden op straat zijn leidend");
   }
-  if (germanHoliday) parts.push("Duitse feestdag — drukker");
+  if (busyUpgrade) parts.push("Extra druk in centrum");
+  else if (germanHoliday) parts.push("Duitse feestdag — drukker");
   return parts.join(" · ");
 }
 
@@ -143,6 +168,10 @@ function parkingModuleCells(
   geoPending: boolean,
   zonesLoading: boolean,
   germanHoliday: boolean,
+  busyUpgrade: boolean,
+  durationRestriction: DurationRestriction | null,
+  now?: Date,
+  prefix?: string,
 ): ModuleCells {
   if (geoPending || zonesLoading) {
     return {
@@ -154,20 +183,29 @@ function parkingModuleCells(
       loading: true,
     };
   }
-  const right = priceRight(kind, snapshot);
+  const { text: right, mode: rightMode } = priceRight(kind, snapshot, now);
+  const secondary = liveSecondary(
+    snapshot,
+    kind,
+    nearBoundary,
+    geoPending,
+    zonesLoading,
+    germanHoliday,
+    busyUpgrade,
+    prefix,
+  );
   return {
     left: timeLeft(kind, snapshot),
     center: zoneCenterLabel(kind, snapshot.zone, zoneRaw),
     right,
-    secondary: liveSecondary(
-      snapshot,
-      kind,
-      nearBoundary,
-      geoPending,
-      zonesLoading,
-      germanHoliday,
-    ),
+    rightMode,
+    secondary:
+      rightMode === "countdown"
+        ? "Nog even gratis · daarna betaald parkeren"
+        : secondary,
+    accent: durationRestriction?.label ?? null,
     tone: panelToneFromParking(kind, snapshot, false),
+    rateTappable: kind === "paid" && snapshot.isPaidNow && snapshot.zone != null,
   };
 }
 
@@ -175,13 +213,18 @@ function StatusModule({
   left,
   center,
   right,
+  rightMode = "rate",
   secondary,
+  accent,
   tone = "neutral",
   loading = false,
+  rateTappable = false,
   onClear,
+  onRateClick,
   children,
 }: ModuleCells & {
   onClear?: () => void;
+  onRateClick?: () => void;
   children?: ReactNode;
 }) {
   return (
@@ -199,32 +242,47 @@ function StatusModule({
           <span className="park-module-zone">{center}</span>
         </div>
         <div className="park-module-col park-module-col--right">
-          <span className={priceCellClass(right)}>{right}</span>
+          {rateTappable && onRateClick ? (
+            <button type="button" className={priceCellClass(rightMode)} onClick={onRateClick}>
+              {right}
+            </button>
+          ) : (
+            <span className={priceCellClass(rightMode)}>{right}</span>
+          )}
         </div>
       </div>
+      {accent && <p className="park-module-accent">{accent}</p>}
       <p className="park-module-secondary">{secondary}</p>
       {children}
     </div>
   );
 }
 
-export function ParkingContextPanel({
-  snapshot,
-  locationKind,
-  zoneRaw,
-  nearBoundary,
-  zonesLoading,
-  zonesError,
-  geoPending,
-  geoDenied,
-  geoUnavailableMessage,
-  onRetryGeo,
-  germanHoliday,
-  selected,
-  hoveredZone,
-  onClearSelection,
-  clock,
-}: ParkingContextPanelProps) {
+export function ParkingContextPanel(props: ParkingContextPanelProps) {
+  const {
+    snapshot,
+    locationKind,
+    zoneRaw,
+    nearBoundary,
+    zonesLoading,
+    zonesError,
+    geoPending,
+    geoDenied,
+    geoUnavailableMessage,
+    onRetryGeo,
+    germanHoliday,
+    busyUpgrade,
+    mapContext,
+    hoveredZone,
+    durationRestriction,
+    estimatorOpen,
+    onEstimatorOpenChange,
+    onClearContext,
+    clock,
+    panelLon,
+    panelLat,
+  } = props;
+
   if (zonesError) {
     return (
       <StatusModule
@@ -256,7 +314,7 @@ export function ParkingContextPanel({
     );
   }
 
-  if (hoveredZone) {
+  if (hoveredZone && mapContext == null) {
     const kind = hoveredZone.kind === "permit" ? "permit" : "paid";
     const snap = resolveParkingAtLocation(hoveredZone.kind, hoveredZone.zoneRaw, clock);
     const cells = parkingModuleCells(
@@ -266,22 +324,27 @@ export function ParkingContextPanel({
       false,
       false,
       false,
-      false,
+      germanHoliday,
+      busyUpgrade,
+      null,
+      clock,
     );
-    cells.secondary =
-      snap.isPaidNow && kind === "paid"
-        ? "Zone onder de muis · betaald parkeren"
-        : kind === "permit"
-          ? "Zone onder de muis · vergunning"
-          : "Zone onder de muis · gratis parkeren";
+    if (cells.rightMode !== "countdown") {
+      cells.secondary =
+        snap.isPaidNow && kind === "paid"
+          ? "Zone onder de muis · betaald parkeren"
+          : kind === "permit"
+            ? "Zone onder de muis · vergunning"
+            : "Zone onder de muis · gratis parkeren";
+    }
     cells.tone = panelToneFromParking(kind, snap, false);
     return <StatusModule {...cells} />;
   }
 
-  if (selected?.type === "info") {
+  if (mapContext?.type === "info") {
     return (
       <div className="park-panel pointer-events-auto" data-tone="neutral">
-        <PanelClose onClear={onClearSelection} />
+        <PanelClose onClear={onClearContext} />
         <p className="park-info-title">ENSKE PARK</p>
         <p className="park-info-body">
           Parkeertarieven en zones voor Enschede. Borden ter plaatse zijn leidend.
@@ -290,26 +353,128 @@ export function ParkingContextPanel({
     );
   }
 
-  if (selected?.type === "zone") {
-    const snap = resolveParkingAtLocation(selected.kind, selected.zoneRaw, clock);
-    const kind = selected.kind === "permit" ? "permit" : "paid";
+  if (mapContext?.type === "garage") {
+    const g = mapContext.garage;
+    const left =
+      g.lastUpdated && g.live
+        ? format(new Date(g.lastUpdated), "HH:mm")
+        : g.capacity
+          ? `${g.capacity.toLocaleString("nl-NL")} pl.`
+          : "—";
+    const center = g.shortLabel.toUpperCase();
+    const right =
+      g.live && g.vacant != null ? `${g.vacant.toLocaleString("nl-NL")} vrij` : "—";
+    const secondary =
+      g.live && g.vacant != null
+        ? `${g.capacity?.toLocaleString("nl-NL") ?? "—"} plaatsen · bijgewerkt ${left}`
+        : "Garage · bezetting onbekend";
+
+    return (
+      <StatusModule
+        left={left}
+        center={center}
+        right={right}
+        secondary={secondary}
+        onClear={onClearContext}
+      />
+    );
+  }
+
+  if (mapContext?.type === "pnr") {
+    return (
+      <StatusModule
+        left="24/7"
+        center="P+R ZUIDERVAL"
+        right={`€ ${formatEuro(PNR_ZUIDERVAL.dailyEur)}/d`}
+        secondary={PNR_ZUIDERVAL.transitNote}
+        onClear={onClearContext}
+      >
+        <a
+          className="park-panel-action mt-2 inline-block"
+          href={PNR_ZUIDERVAL.routeUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Route
+        </a>
+      </StatusModule>
+    );
+  }
+
+  if (mapContext?.type === "destination") {
+    const d = mapContext;
+    const snap = resolveParkingAtLocation(d.kind, d.zoneRaw, clock);
+    const cells = parkingModuleCells(
+      d.kind,
+      snap,
+      d.zoneRaw,
+      false,
+      false,
+      false,
+      germanHoliday,
+      busyUpgrade,
+      durationRestriction,
+      clock,
+      "Bestemming",
+    );
+    return (
+      <StatusModule {...cells} onClear={onClearContext} accent={cells.accent}>
+        {estimatorOpen && snap.zone && clock && (
+          <ParkingEstimator
+            zone={snap.zone}
+            lon={panelLon}
+            lat={panelLat}
+            clock={clock}
+            onClose={() => onEstimatorOpenChange(false)}
+          />
+        )}
+      </StatusModule>
+    );
+  }
+
+  if (mapContext?.type === "zone") {
+    const snap = resolveParkingAtLocation(mapContext.kind, mapContext.zoneRaw, clock);
+    const kind = mapContext.kind === "permit" ? "permit" : "paid";
     const cells = parkingModuleCells(
       kind,
       snap,
-      selected.zoneRaw,
+      mapContext.zoneRaw,
       false,
       false,
       false,
-      false,
+      germanHoliday,
+      busyUpgrade,
+      durationRestriction,
+      clock,
     );
-    cells.secondary =
-      snap.isPaidNow && kind === "paid"
-        ? "Geselecteerde zone · betaald parkeren"
-        : kind === "permit"
-          ? "Geselecteerde zone · vergunning"
-          : "Geselecteerde zone · gratis parkeren";
+    if (cells.rightMode !== "countdown") {
+      cells.secondary =
+        snap.isPaidNow && kind === "paid"
+          ? "Geselecteerde zone · betaald parkeren"
+          : kind === "permit"
+            ? "Geselecteerde zone · vergunning"
+            : "Geselecteerde zone · gratis parkeren";
+    }
     cells.tone = panelToneFromParking(kind, snap, false);
-    return <StatusModule {...cells} onClear={onClearSelection} />;
+    return (
+      <StatusModule
+        {...cells}
+        onClear={onClearContext}
+        onRateClick={
+          cells.rateTappable ? () => onEstimatorOpenChange(true) : undefined
+        }
+      >
+        {estimatorOpen && snap.zone && clock && (
+          <ParkingEstimator
+            zone={snap.zone}
+            lon={panelLon}
+            lat={panelLat}
+            clock={clock}
+            onClose={() => onEstimatorOpenChange(false)}
+          />
+        )}
+      </StatusModule>
+    );
   }
 
   const cells = parkingModuleCells(
@@ -320,9 +485,27 @@ export function ParkingContextPanel({
     geoPending,
     zonesLoading,
     germanHoliday,
+    busyUpgrade,
+    durationRestriction,
+    clock,
   );
 
-  return <StatusModule {...cells} />;
+  return (
+    <StatusModule
+      {...cells}
+      onRateClick={cells.rateTappable ? () => onEstimatorOpenChange(true) : undefined}
+    >
+      {estimatorOpen && snapshot.zone && clock && (
+        <ParkingEstimator
+          zone={snapshot.zone}
+          lon={panelLon}
+          lat={panelLat}
+          clock={clock}
+          onClose={() => onEstimatorOpenChange(false)}
+        />
+      )}
+    </StatusModule>
+  );
 }
 
 function PanelClose({ onClear }: { onClear: () => void }) {

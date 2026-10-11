@@ -170,6 +170,16 @@ body {
   text-align: right;
 }
 
+.park-module-col--right .park-module-time {
+  color: var(--map-text);
+  font-weight: 600;
+}
+
+.park-panel[data-tone="free"] .park-module-col--right .park-module-time {
+  color: #a7f3c7;
+  font-variant-numeric: tabular-nums;
+}
+
 .park-module-time {
   display: block;
   font-size: 0.8125rem;
@@ -191,11 +201,11 @@ body {
 
 .park-module-price {
   display: block;
-  font-size: clamp(1.0625rem, 4.8vw, 1.25rem);
-  font-weight: 700;
-  line-height: 1.15;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.2;
   color: var(--map-text);
-  letter-spacing: -0.03em;
+  letter-spacing: 0.01em;
 }
 
 .park-module-price--free {
@@ -210,6 +220,15 @@ body {
   color: #bfdbfe;
 }
 
+.park-module-accent {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #f0abfc;
+}
+
 .park-module-secondary {
   margin: 9px 0 0;
   padding-top: 8px;
@@ -219,6 +238,203 @@ body {
   line-height: 1.35;
   color: var(--map-text-muted);
   letter-spacing: 0.01em;
+}
+
+.park-module-col--right button.park-module-time {
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 255, 255, 0.2);
+  text-underline-offset: 3px;
+}
+
+.park-estimator {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.park-estimator-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.park-estimator-title {
+  font-size: 0.6875rem;
+  color: var(--map-text-muted);
+}
+
+.park-estimator-close {
+  border: none;
+  background: transparent;
+  color: var(--map-text-secondary);
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.park-estimator-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+
+.park-estimator-chip {
+  min-width: 4.5rem;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  text-align: center;
+}
+
+.park-estimator-chip-label {
+  display: block;
+  font-size: 0.625rem;
+  color: var(--map-text-muted);
+}
+
+.park-estimator-chip-value {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--map-text);
+}
+
+.park-estimator-chip-warn {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.5625rem;
+  color: #f0abfc;
+  line-height: 1.25;
+}
+
+.map-search {
+  width: min(18rem, calc(100vw - 5rem));
+}
+
+.map-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--map-radius-control);
+  background: var(--surface-elevated);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+}
+
+.map-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--map-text);
+  font-size: 0.8125rem;
+  outline: none;
+}
+
+.map-search-close {
+  display: inline-flex;
+  border: none;
+  background: transparent;
+  color: var(--map-text-secondary);
+  cursor: pointer;
+}
+
+.map-search-results {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--map-radius-control);
+  background: var(--surface-elevated);
+  border: 1px solid var(--panel-border);
+  overflow: hidden;
+  box-shadow: var(--panel-shadow);
+}
+
+.map-search-result {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-size: 0.75rem;
+  color: var(--map-text-secondary);
+  cursor: pointer;
+}
+
+.map-search-result:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--map-text);
+}
+
+.map-search-result--muted {
+  cursor: default;
+}
+
+.garage-map-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.125rem;
+  height: 1.125rem;
+  padding: 0 0.3rem;
+  border: 1px solid rgba(120, 155, 195, 0.32);
+  border-radius: 9999px;
+  background: rgba(10, 13, 19, 0.9);
+  color: #b4cce8;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4);
+  font-size: 0.40625rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.garage-map-marker--compact {
+  width: 1.125rem;
+  min-width: 1.125rem;
+  padding: 0;
+}
+
+.garage-map-marker--full {
+  color: #8fa3bc;
+}
+
+.pnr-map-marker {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  padding: 2px 4px;
+  border-radius: 6px;
+  border: 1px solid rgba(167, 243, 199, 0.25);
+  background: rgba(10, 13, 19, 0.88);
+  color: #a7f3c7;
+  font-size: 0.4375rem;
+  font-weight: 700;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+.pnr-map-marker::after {
+  content: "€3";
+  font-size: 0.375rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.map-destination-pin {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #fbbf24;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
 }
 
 .park-panel-muted {
@@ -322,13 +538,22 @@ body {
   margin-right: max(12px, env(safe-area-inset-right)) !important;
 }
 
+.map-attribution {
+  isolation: isolate;
+}
+
+.maplibregl-map {
+  position: relative;
+  z-index: 0;
+}
+
 .map-attribution-text {
   margin: 0;
   font-size: 0.4375rem;
   line-height: 1.2;
   letter-spacing: 0.02em;
-  color: rgba(255, 255, 255, 0.14);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  color: rgba(255, 255, 255, 0.22);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
 }
 
 .map-attribution-link {
