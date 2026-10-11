@@ -32,13 +32,13 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#f8fafc",
+  themeColor: "#f1f5f9",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="nl" className={`${dmSans.variable} h-full`}>
-      <body className="h-full overflow-hidden bg-slate-100 font-sans antialiased text-slate-900">
+      <body className="h-full overflow-hidden bg-[var(--background)] font-sans antialiased text-[var(--foreground)]">
         {children}
       </body>
     </html>

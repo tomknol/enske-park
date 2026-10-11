@@ -150,15 +150,15 @@ export function zoneDisplayName(zoneRaw: string | null): string {
 }
 
 export function zoneFillColor(zoneRaw: string | null, layer: "paid" | "permit"): string {
-  if (layer === "permit") return "rgba(37, 99, 235, 0.22)";
+  if (layer === "permit") return "rgba(37, 99, 235, 0.14)";
   const z = normalizeZoneId(zoneRaw);
-  if (z === "1" || z === "1B") return "rgba(220, 38, 38, 0.28)";
-  return "rgba(245, 158, 11, 0.26)";
+  if (z === "1" || z === "1B") return "rgba(220, 38, 38, 0.16)";
+  return "rgba(245, 158, 11, 0.15)";
 }
 
 export function zoneLineColor(zoneRaw: string | null, layer: "paid" | "permit"): string {
-  if (layer === "permit") return "rgba(29, 78, 216, 0.85)";
+  if (layer === "permit") return "rgba(29, 78, 216, 0.55)";
   const z = normalizeZoneId(zoneRaw);
-  if (z === "1" || z === "1B") return "rgba(185, 28, 28, 0.9)";
-  return "rgba(217, 119, 6, 0.85)";
+  if (z === "1" || z === "1B") return "rgba(185, 28, 28, 0.6)";
+  return "rgba(217, 119, 6, 0.55)";
 }

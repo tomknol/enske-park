@@ -4,17 +4,19 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-semibold transition-[transform,opacity] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--map-accent)]/35 disabled:pointer-events-none disabled:opacity-45 active:scale-[0.98]",
   {
     variants: {
       variant: {
-        default: "bg-slate-900 text-white shadow-sm hover:bg-slate-800",
-        secondary: "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50",
-        ghost: "hover:bg-slate-100 text-slate-700",
+        default:
+          "rounded-[var(--map-radius-control)] bg-[var(--map-text)] px-5 py-2.5 text-white shadow-sm",
+        secondary:
+          "rounded-[var(--map-radius-control)] border border-[var(--map-border)] bg-[var(--map-surface)] px-4 py-2 text-[var(--map-text)] shadow-sm",
+        ghost: "rounded-[var(--map-radius-control)] text-[var(--map-text-secondary)] hover:bg-black/5",
       },
       size: {
         default: "h-11 px-5",
-        icon: "h-11 w-11",
+        icon: "h-11 w-11 shrink-0 p-0",
         sm: "h-9 px-4 text-xs",
       },
     },
@@ -40,6 +42,6 @@ export function Button({
 }: ButtonProps) {
   const Comp = asChild ? Slot : "button";
   return (
-    <Comp className={cn(buttonVariants({ variant, size, className }))} {...props} />
+    <Comp className={cn(buttonVariants({ variant, size }), className)} {...props} />
   );
 }

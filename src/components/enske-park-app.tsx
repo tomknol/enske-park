@@ -4,20 +4,23 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import { toZonedTime } from "date-fns-tz";
-import { Crosshair, Info } from "lucide-react";
+import { Crosshair } from "lucide-react";
 import type { GarageMarkerData } from "@/components/parking-map";
 
 const ParkingMap = dynamic(
   () => import("@/components/parking-map").then((m) => m.ParkingMap),
   {
     ssr: false,
-    loading: () => <div className="absolute inset-0 bg-slate-200 animate-pulse" aria-hidden />,
+    loading: () => (
+      <div className="absolute inset-0 bg-[var(--background)]" aria-hidden />
+    ),
   },
 );
-import { PriceCard } from "@/components/price-card";
+import { ParkingStatusIsland } from "@/components/parking-status-island";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { Button } from "@/components/ui/button";
 import { useGeolocation } from "@/hooks/use-geolocation";
+import { useStableUserZone } from "@/hooks/use-stable-user-zone";
 import { isRelevantGermanHoliday } from "@/lib/holidays-de";
 import {
   CENTRE_OUDE_MARKT,
@@ -30,6 +33,7 @@ import {
   type LocationKind,
 } from "@/lib/parking-status";
 import { walkingSummary } from "@/lib/walking";
+import { activeZoneLabelKey } from "@/lib/zone-labels";
 import { locateUserInZones, type ZoneCollections } from "@/lib/zones";
 
 type SheetState =
@@ -110,10 +114,9 @@ export function EnskeParkApp() {
   }, [loadGarages]);
 
   const position = geoState.status === "ready" ? geoState.position : null;
-
   const geoPending = geoState.status === "pending";
 
-  const userZone = useMemo(() => {
+  const rawUserZone = useMemo(() => {
     if (!position || !zones) {
       return {
         kind: "outside" as const,
@@ -130,6 +133,13 @@ export function EnskeParkApp() {
     );
   }, [position, zones]);
 
+  const userZone = useStableUserZone(rawUserZone);
+
+  const currentZoneLabelKey = useMemo(
+    () => activeZoneLabelKey(userZone.kind, userZone.zoneRaw),
+    [userZone.kind, userZone.zoneRaw],
+  );
+
   const snapshot = useMemo(
     () => resolveParkingAtLocation(userZone.kind, userZone.zoneRaw, clock ?? undefined),
     [userZone.kind, userZone.zoneRaw, clock],
@@ -143,6 +153,27 @@ export function EnskeParkApp() {
     (g) => g.level === "full" || g.level === "busy",
   ).length;
   const busyUpgrade = germanHoliday && nearlyFullCount >= 2;
+
+  const handleUserMovedMap = useCallback(() => setFollowUser(false), []);
+  const handleZoneSelect = useCallback(
+    ({
+      kind,
+      zoneRaw,
+    }: {
+      kind: "paid" | "permit";
+      zoneRaw: string | null;
+      gebiedCod: string | null;
+    }) => {
+      setSheet({ type: "zone", kind, zoneRaw });
+    },
+    [],
+  );
+  const handleGarageSelect = useCallback((garage: GarageMarkerData) => {
+    setSheet({ type: "garage", garage });
+  }, []);
+  const handleFreeSelect = useCallback((spotId: string) => {
+    setSheet({ type: "free", spotId });
+  }, []);
 
   const sheetOpen = sheet.type !== "closed";
 
@@ -201,67 +232,46 @@ export function EnskeParkApp() {
   }, [sheet, clock, zonesMeta, garagesMeta]);
 
   return (
-    <div className="relative h-[100dvh] w-full overflow-hidden bg-slate-100">
+    <div className="relative h-[100dvh] w-full overflow-hidden bg-[var(--background)]">
       <ParkingMap
         zones={zones}
         position={position}
         followUser={followUser}
-        onUserMovedMap={() => setFollowUser(false)}
+        onUserMovedMap={handleUserMovedMap}
         garages={garages}
-        onZoneSelect={({ kind, zoneRaw }) =>
-          setSheet({ type: "zone", kind, zoneRaw })
-        }
-        onGarageSelect={(garage) => setSheet({ type: "garage", garage })}
-        onFreeSelect={(spotId) => setSheet({ type: "free", spotId })}
+        onZoneSelect={handleZoneSelect}
+        onGarageSelect={handleGarageSelect}
+        onFreeSelect={handleFreeSelect}
         recenterToken={recenterToken}
+        activeZoneLabelKey={currentZoneLabelKey}
       />
 
       <div
-        className="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-col gap-3 px-4"
-        style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}
+        className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col items-center gap-2"
+        style={{ paddingTop: "max(12px, env(safe-area-inset-top))" }}
       >
-        <div className="flex items-start justify-between gap-3">
-          <div className="pointer-events-auto">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-600">
-              EnsKe Park
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="secondary"
-            size="icon"
-            className="pointer-events-auto shrink-0 rounded-full shadow-md"
-            aria-label="Informatie"
-            onClick={() => setSheet({ type: "info" })}
-          >
-            <Info className="h-5 w-5" aria-hidden />
-          </Button>
-        </div>
-
-        <PriceCard
+        <ParkingStatusIsland
           snapshot={snapshot}
+          locationKind={userZone.kind}
+          zoneRaw={userZone.zoneRaw}
           nearBoundary={userZone.nearBoundary}
           zonesLoading={zonesLoading}
           zonesError={zonesError}
           geoPending={geoPending}
           germanHoliday={germanHoliday}
           busyUpgrade={busyUpgrade}
+          clock={clock ?? undefined}
+          onInfo={() => setSheet({ type: "info" })}
         />
 
         {(geoState.status === "denied" || geoState.status === "unavailable") && (
-          <div className="pointer-events-auto rounded-xl bg-white/95 px-4 py-3 text-sm shadow-md ring-1 ring-slate-200">
-            <p className="font-medium text-slate-900">
+          <div className="map-island pointer-events-auto mx-auto w-[calc(100%-24px)] max-w-[420px] px-4 py-3">
+            <p className="text-sm font-semibold text-[var(--map-text)]">
               {geoState.status === "denied"
-                ? "Locatie nodig om je huidige tarief te bepalen"
+                ? "Locatie nodig voor je parkeerstatus"
                 : geoState.message}
             </p>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="mt-2"
-              onClick={retryGeo}
-            >
+            <Button variant="secondary" size="sm" className="mt-3 w-full" onClick={retryGeo}>
               Opnieuw proberen
             </Button>
           </div>
@@ -269,26 +279,24 @@ export function EnskeParkApp() {
       </div>
 
       <div
-        className="absolute z-10 flex flex-col gap-2"
+        className="map-locate-wrap absolute z-20"
         style={{
-          left: "max(1rem, env(safe-area-inset-left))",
-          bottom: "max(1rem, env(safe-area-inset-bottom))",
+          right: "max(12px, env(safe-area-inset-right))",
+          bottom: "max(12px, env(safe-area-inset-bottom))",
         }}
       >
-        <Button
+        <button
           type="button"
-          variant="secondary"
-          size="icon"
-          className="rounded-full shadow-lg"
+          className="map-float-btn"
           aria-label="Naar mijn locatie"
+          disabled={!position}
           onClick={() => {
             setFollowUser(true);
             setRecenterToken((t) => t + 1);
           }}
-          disabled={!position}
         >
-          <Crosshair className="h-5 w-5" aria-hidden />
-        </Button>
+          <Crosshair className="h-5 w-5" strokeWidth={2} aria-hidden />
+        </button>
       </div>
 
       <BottomSheet
@@ -297,8 +305,10 @@ export function EnskeParkApp() {
         title={sheetContent.title}
       >
         <div className="space-y-2">
-          {sheetContent.body.map((line) => (
-            <p key={line}>{line}</p>
+          {sheetContent.body.map((line, i) => (
+            <p key={`${line}-${i}`} className={i === 0 ? "font-medium text-[var(--map-text)]" : ""}>
+              {line}
+            </p>
           ))}
           {sheet.type === "free" && "route" in sheetContent && sheetContent.route && (
             <Button asChild className="mt-4 w-full">

@@ -2,25 +2,23 @@
 
 import {
   GeoJSONSource,
-  Map,
+  Map as MaplibreMap,
   Marker,
   NavigationControl,
   setWorkerUrl,
+  type ExpressionSpecification,
+  type MapGeoJSONFeature,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef } from "react";
 import type { FeatureCollection } from "geojson";
+import { buildZoneLabelPoints, ZONE_LABEL_FONT } from "@/lib/zone-labels";
 import {
   zoneFillColor,
   zoneLineColor,
-  zoneDisplayName,
   type ZoneCollections,
 } from "@/lib/zones";
-import {
-  formatGarageMarkerLabel,
-  occupancyColors,
-  type GarageOccupancyLevel,
-} from "@/lib/garages";
+import { formatGarageMarkerLabel, type GarageOccupancyLevel } from "@/lib/garages";
 import { FREE_PARKING_SPOTS } from "@/lib/free-parking";
 import type { GeoPosition } from "@/hooks/use-geolocation";
 
@@ -51,6 +49,7 @@ type ParkingMapProps = {
   onGarageSelect: (garage: GarageMarkerData) => void;
   onFreeSelect: (spotId: string) => void;
   recenterToken: number;
+  activeZoneLabelKey: string | null;
 };
 
 const DEFAULT_CENTER: [number, number] = [6.8937, 52.2215];
@@ -59,6 +58,87 @@ const MAP_STYLE =
   "https://tiles.openfreemap.org/styles/liberty";
 const MAPLIBRE_WORKER_URL =
   "https://cdn.jsdelivr.net/npm/maplibre-gl@6.13.0/dist/maplibre-gl-worker.mjs";
+
+/** Keep the map strictly 2D / north-up top view. */
+const FLAT_CAMERA = { pitch: 0, bearing: 0 } as const;
+
+function applyFlatMapStyle(map: MaplibreMap) {
+  const style = map.getStyle();
+  if (!style?.layers) return;
+  for (const layer of style.layers) {
+    if (layer.type === "fill-extrusion") {
+      map.setLayoutProperty(layer.id, "visibility", "none");
+    }
+  }
+}
+
+const ZONE_LABEL_SIZE: ExpressionSpecification = [
+  "interpolate",
+  ["linear"],
+  ["zoom"],
+  11,
+  0,
+  12,
+  ["case", ["boolean", ["get", "emphasized"], false], 26, 22],
+  13.5,
+  ["case", ["boolean", ["get", "emphasized"], false], 34, 28],
+  15,
+  ["case", ["boolean", ["get", "emphasized"], false], 44, 36],
+  16.5,
+  ["case", ["boolean", ["get", "emphasized"], false], 52, 44],
+  18,
+  ["case", ["boolean", ["get", "emphasized"], false], 58, 48],
+];
+
+const ZONE_LABEL_HALO_WIDTH: ExpressionSpecification = [
+  "case",
+  ["boolean", ["get", "emphasized"], false],
+  3.5,
+  2.8,
+];
+
+const ZONE_LABEL_OPACITY: ExpressionSpecification = [
+  "case",
+  ["boolean", ["get", "emphasized"], false],
+  0.78,
+  0.55,
+];
+
+const GARAGE_COUNT_MIN_ZOOM = 14.25;
+const FREE_MARKER_MIN_ZOOM = 13.25;
+
+function syncGarageMarkerAppearance(el: HTMLButtonElement, g: GarageMarkerData, zoom: number) {
+  const showCount =
+    zoom >= GARAGE_COUNT_MIN_ZOOM && g.live && g.vacant != null && g.level !== "full";
+  el.className = showCount ? "garage-map-marker" : "garage-map-marker garage-map-marker--compact";
+  el.textContent = showCount ? `P ${g.vacant}` : "P";
+  el.setAttribute(
+    "aria-label",
+    `${g.label}, ${g.live ? formatGarageMarkerLabel(g.level, g.vacant) : "Live bezetting onbekend"}`,
+  );
+}
+
+function createGarageMarkerElement(g: GarageMarkerData, zoom: number): HTMLButtonElement {
+  const el = document.createElement("button");
+  el.type = "button";
+  syncGarageMarkerAppearance(el, g, zoom);
+  return el;
+}
+
+function applyZoneLabelLayerStyle(map: MaplibreMap) {
+  if (!map.getLayer("zone-labels")) return;
+  map.setLayoutProperty("zone-labels", "text-field", ["get", "label"]);
+  map.setLayoutProperty("zone-labels", "text-font", [...ZONE_LABEL_FONT]);
+  map.setLayoutProperty("zone-labels", "text-anchor", "center");
+  map.setLayoutProperty("zone-labels", "text-allow-overlap", true);
+  map.setLayoutProperty("zone-labels", "text-ignore-placement", true);
+  map.setLayoutProperty("zone-labels", "text-optional", false);
+  map.setLayoutProperty("zone-labels", "text-size", ZONE_LABEL_SIZE);
+  map.setPaintProperty("zone-labels", "text-color", ["get", "textColor"]);
+  map.setPaintProperty("zone-labels", "text-halo-color", "rgba(255, 255, 255, 0.95)");
+  map.setPaintProperty("zone-labels", "text-halo-width", ZONE_LABEL_HALO_WIDTH);
+  map.setPaintProperty("zone-labels", "text-opacity", ZONE_LABEL_OPACITY);
+}
 
 function enrichCollections(zones: ZoneCollections) {
   const paid: FeatureCollection = {
@@ -69,7 +149,6 @@ function enrichCollections(zones: ZoneCollections) {
         ...f.properties,
         fill: zoneFillColor(f.properties?.ZONE ?? null, "paid"),
         line: zoneLineColor(f.properties?.ZONE ?? null, "paid"),
-        label: zoneDisplayName(f.properties?.ZONE ?? null),
       },
     })),
   };
@@ -81,7 +160,6 @@ function enrichCollections(zones: ZoneCollections) {
         ...f.properties,
         fill: zoneFillColor(f.properties?.ZONE ?? null, "permit"),
         line: zoneLineColor(f.properties?.ZONE ?? null, "permit"),
-        label: "Vergunning",
       },
     })),
   };
@@ -98,45 +176,131 @@ export function ParkingMap({
   onGarageSelect,
   onFreeSelect,
   recenterToken,
+  activeZoneLabelKey,
 }: ParkingMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<Map | null>(null);
+  const mapRef = useRef<MaplibreMap | null>(null);
   const garageMarkersRef = useRef<Marker[]>([]);
   const freeMarkersRef = useRef<Marker[]>([]);
   const userMarkerRef = useRef<Marker | null>(null);
   const accuracySourceId = "user-accuracy";
   const zoneHandlersBound = useRef(false);
   const hasCenteredOnUser = useRef(false);
+  const labelPointsRef = useRef<FeatureCollection | null>(null);
+  const zonesAppliedRef = useRef<ZoneCollections | null>(null);
+  const onUserMovedMapRef = useRef(onUserMovedMap);
+  const onZoneSelectRef = useRef(onZoneSelect);
+  const onGarageSelectRef = useRef(onGarageSelect);
+  const onFreeSelectRef = useRef(onFreeSelect);
+  const activeZoneLabelKeyRef = useRef(activeZoneLabelKey);
+  const garagesVisualKeyRef = useRef("");
+  const garageMarkerElsRef = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const garageByIdRef = useRef<Map<string, GarageMarkerData>>(new Map());
+  const freeMarkerElsRef = useRef<HTMLButtonElement[]>([]);
+  const mapZoomRef = useRef(14);
+
+  useEffect(() => {
+    onUserMovedMapRef.current = onUserMovedMap;
+    onZoneSelectRef.current = onZoneSelect;
+    onGarageSelectRef.current = onGarageSelect;
+    onFreeSelectRef.current = onFreeSelect;
+    activeZoneLabelKeyRef.current = activeZoneLabelKey;
+  }, [
+    onUserMovedMap,
+    onZoneSelect,
+    onGarageSelect,
+    onFreeSelect,
+    activeZoneLabelKey,
+  ]);
+
+  const syncLabelEmphasis = (map: MaplibreMap, activeKey: string | null) => {
+    const sourceId = "zone-label-points";
+    const base = labelPointsRef.current;
+    if (!map.getSource(sourceId) || !base) return;
+
+    const next: FeatureCollection = {
+      type: "FeatureCollection",
+      features: base.features.map((feature) => {
+        const zoneKey = feature.properties?.zoneKey as string | undefined;
+        const emphasized = activeKey != null && zoneKey === activeKey;
+        return {
+          ...feature,
+          properties: {
+            ...feature.properties,
+            emphasized,
+          },
+        };
+      }),
+    };
+    labelPointsRef.current = next;
+    (map.getSource(sourceId) as GeoJSONSource).setData(next);
+  };
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
     setWorkerUrl(MAPLIBRE_WORKER_URL);
 
-    const map = new Map({
+    const map = new MaplibreMap({
       container: containerRef.current,
       style: MAP_STYLE,
       center: DEFAULT_CENTER,
       zoom: 14,
       attributionControl: { compact: true },
-      pitch: 0,
+      ...FLAT_CAMERA,
+      maxPitch: 0,
+      minPitch: 0,
+      dragRotate: false,
+      pitchWithRotate: false,
+      touchPitch: false,
     });
 
-    map.addControl(new NavigationControl({ showCompass: false }), "bottom-right");
+    if (window.matchMedia("(pointer: fine)").matches) {
+      map.addControl(
+        new NavigationControl({ showCompass: false, visualizePitch: false }),
+        "bottom-right",
+      );
+    }
 
-    map.on("dragstart", () => onUserMovedMap());
+    const onZoom = () => {
+      mapZoomRef.current = map.getZoom();
+      garageMarkerElsRef.current.forEach((el, id) => {
+        const g = garageByIdRef.current.get(id);
+        if (g) syncGarageMarkerAppearance(el, g, mapZoomRef.current);
+      });
+      const showFree = mapZoomRef.current >= FREE_MARKER_MIN_ZOOM;
+      for (const el of freeMarkerElsRef.current) {
+        el.classList.toggle("free-map-marker--hidden", !showFree);
+      }
+    };
+    map.on("zoom", onZoom);
+    map.on("load", onZoom);
+
+    map.touchZoomRotate.disableRotation();
+    map.on("load", () => applyFlatMapStyle(map));
+    map.on("pitch", () => {
+      if (map.getPitch() !== 0) map.setPitch(0);
+    });
+
+    map.on("dragstart", () => onUserMovedMapRef.current());
 
     mapRef.current = map;
 
     return () => {
+      map.off("zoom", onZoom);
       map.remove();
       mapRef.current = null;
+      zoneHandlersBound.current = false;
+      hasCenteredOnUser.current = false;
+      zonesAppliedRef.current = null;
     };
-  }, [onUserMovedMap]);
+  }, []);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !zones) return;
+    if (zonesAppliedRef.current === zones) return;
+    zonesAppliedRef.current = zones;
 
     const apply = () => {
       const { paid, permit } = enrichCollections(zones);
@@ -155,7 +319,7 @@ export function ParkingMap({
             source: id,
             paint: {
               "fill-color": ["get", "fill"],
-              "fill-opacity": 0.45,
+              "fill-opacity": 0.32,
             },
           });
           map.addLayer({
@@ -164,43 +328,69 @@ export function ParkingMap({
             source: id,
             paint: {
               "line-color": ["get", "line"],
-              "line-width": 1.5,
-            },
-          });
-          map.addLayer({
-            id: `${id}-label`,
-            type: "symbol",
-            source: id,
-            minzoom: 15.5,
-            layout: {
-              "text-field": ["get", "label"],
-              "text-size": 12,
-              "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-            },
-            paint: {
-              "text-color": "#334155",
-              "text-halo-color": "#ffffff",
-              "text-halo-width": 1.2,
+              "line-width": 1,
             },
           });
         }
+        if (map.getLayer(`${id}-label`)) {
+          map.removeLayer(`${id}-label`);
+        }
       }
+
+      const labelPoints = buildZoneLabelPoints(zones);
+      labelPointsRef.current = labelPoints;
+
+      if (map.getSource("zone-label-points")) {
+        (map.getSource("zone-label-points") as GeoJSONSource).setData(labelPoints);
+        applyZoneLabelLayerStyle(map);
+      } else {
+        map.addSource("zone-label-points", {
+          type: "geojson",
+          data: labelPoints,
+          promoteId: "labelId",
+        });
+        map.addLayer({
+          id: "zone-labels",
+          type: "symbol",
+          source: "zone-label-points",
+          minzoom: 11,
+          layout: {
+            "text-field": ["get", "label"],
+            "text-font": [...ZONE_LABEL_FONT],
+            "text-anchor": "center",
+            "text-allow-overlap": true,
+            "text-ignore-placement": true,
+            "text-optional": false,
+            "text-size": ZONE_LABEL_SIZE,
+          },
+          paint: {
+            "text-color": ["get", "textColor"],
+            "text-halo-color": "rgba(255, 255, 255, 0.95)",
+            "text-halo-width": ZONE_LABEL_HALO_WIDTH,
+            "text-opacity": ZONE_LABEL_OPACITY,
+          },
+        });
+      }
+
+      syncLabelEmphasis(map, activeZoneLabelKeyRef.current);
 
       if (!zoneHandlersBound.current) {
         zoneHandlersBound.current = true;
-        map.on("click", (e) => {
-          const features = map.queryRenderedFeatures(e.point, {
-            layers: ["paid-zones-fill", "permit-zones-fill"],
-          });
-          const f = features[0];
+
+        const onZoneLayerActivate = (e: { features?: MapGeoJSONFeature[] }) => {
+          const f = e.features?.[0];
           if (!f) return;
-          const layer = f.layer.id.startsWith("permit") ? "permit" : "paid";
-          onZoneSelect({
-            kind: layer,
+          const layerId = f.layer?.id ?? "";
+          const kind = layerId.startsWith("permit") ? "permit" : "paid";
+          onZoneSelectRef.current({
+            kind,
             zoneRaw: (f.properties?.ZONE as string) ?? null,
             gebiedCod: (f.properties?.GEBIED_COD as string) ?? null,
           });
-        });
+        };
+
+        map.on("click", "paid-zones-fill", onZoneLayerActivate);
+        map.on("click", "permit-zones-fill", onZoneLayerActivate);
         map.on("mouseenter", "paid-zones-fill", () => {
           map.getCanvas().style.cursor = "pointer";
         });
@@ -218,7 +408,13 @@ export function ParkingMap({
 
     if (map.isStyleLoaded()) apply();
     else map.once("load", apply);
-  }, [zones, onZoneSelect]);
+  }, [zones]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !zones) return;
+    syncLabelEmphasis(map, activeZoneLabelKey);
+  }, [activeZoneLabelKey, zones]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -228,7 +424,7 @@ export function ParkingMap({
 
     if (!userMarkerRef.current) {
       const el = document.createElement("div");
-      el.className = "h-4 w-4 rounded-full border-2 border-white bg-sky-500 shadow-md";
+      el.className = "map-user-dot";
       userMarkerRef.current = new Marker({ element: el }).setLngLat([lon, lat]).addTo(map);
     } else {
       userMarkerRef.current.setLngLat([lon, lat]);
@@ -274,7 +470,7 @@ export function ParkingMap({
           type: "fill",
           source: accuracySourceId,
           filter: ["==", ["geometry-type"], "Polygon"],
-          paint: { "fill-color": "#0ea5e9", "fill-opacity": 0.12 },
+          paint: { "fill-color": "#2563eb", "fill-opacity": 0.14 },
         });
         map.addLayer({
           id: "user-accuracy-point",
@@ -295,7 +491,7 @@ export function ParkingMap({
     else map.once("load", upsert);
 
     if (!hasCenteredOnUser.current) {
-      map.easeTo({ center: [lon, lat], zoom: 16, duration: 600 });
+      map.easeTo({ center: [lon, lat], zoom: 16, duration: 600, ...FLAT_CAMERA });
       hasCenteredOnUser.current = true;
     }
   }, [position]);
@@ -306,6 +502,7 @@ export function ParkingMap({
         center: [position.lon, position.lat],
         zoom: 16,
         duration: 700,
+        ...FLAT_CAMERA,
       });
     }
   }, [followUser, position, recenterToken]);
@@ -314,39 +511,36 @@ export function ParkingMap({
     const map = mapRef.current;
     if (!map) return;
 
+    const visualKey = garages
+      .map((g) => `${g.id}:${g.live}:${g.level}:${g.vacant ?? "x"}`)
+      .join("|");
+    if (visualKey === garagesVisualKeyRef.current) return;
+    garagesVisualKeyRef.current = visualKey;
+
     garageMarkersRef.current.forEach((m) => m.remove());
     garageMarkersRef.current = [];
+    garageMarkerElsRef.current.clear();
+    garageByIdRef.current.clear();
 
     garages.forEach((g) => {
       if (g.lat == null || g.lon == null) return;
-      const colors = occupancyColors(g.level);
-      const el = document.createElement("button");
-      el.type = "button";
-      el.className =
-        "min-h-11 min-w-11 rounded-lg px-2 py-1.5 text-[10px] font-bold leading-tight shadow-md ring-1 transition-transform active:scale-95";
-      el.style.background = colors.bg;
-      el.style.color = colors.text;
-      el.style.borderColor = colors.border;
-      el.setAttribute(
-        "aria-label",
-        `${g.label}, ${g.live ? formatGarageMarkerLabel(g.level, g.vacant) : "Live bezetting onbekend"}`,
-      );
-      el.textContent = g.live
-        ? `${g.shortLabel}\n${formatGarageMarkerLabel(g.level, g.vacant).replace("P ", "")}`
-        : `${g.shortLabel}\n?`;
-      el.style.whiteSpace = "pre-line";
-      el.style.textAlign = "center";
+      const el = createGarageMarkerElement(g, mapZoomRef.current);
+      garageMarkerElsRef.current.set(g.id, el);
+      garageByIdRef.current.set(g.id, g);
 
       const marker = new Marker({ element: el, anchor: "center" })
         .setLngLat([g.lon, g.lat])
         .addTo(map);
-      el.addEventListener("click", (ev) => {
+      const openGarage = (ev: Event) => {
+        ev.preventDefault();
         ev.stopPropagation();
-        onGarageSelect(g);
-      });
+        onGarageSelectRef.current(g);
+      };
+      el.addEventListener("click", openGarage);
+      el.addEventListener("touchend", openGarage, { passive: false });
       garageMarkersRef.current.push(marker);
     });
-  }, [garages, onGarageSelect]);
+  }, [garages]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -354,26 +548,37 @@ export function ParkingMap({
 
     freeMarkersRef.current.forEach((m) => m.remove());
     freeMarkersRef.current = [];
+    freeMarkerElsRef.current = [];
 
     FREE_PARKING_SPOTS.forEach((spot) => {
       const el = document.createElement("button");
       el.type = "button";
-      el.className =
-        "flex min-h-11 min-w-11 items-center justify-center rounded-full bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white shadow-md ring-2 ring-white active:scale-95";
+      el.className = "free-map-marker";
+      if (mapZoomRef.current < FREE_MARKER_MIN_ZOOM) {
+        el.classList.add("free-map-marker--hidden");
+      }
       el.textContent = "€0";
+      freeMarkerElsRef.current.push(el);
       el.setAttribute("aria-label", `Gratis parkeren ${spot.name}`);
       const marker = new Marker({ element: el, anchor: "center" })
         .setLngLat([spot.lon, spot.lat])
         .addTo(map);
-      el.addEventListener("click", (ev) => {
+      const openFree = (ev: Event) => {
+        ev.preventDefault();
         ev.stopPropagation();
-        onFreeSelect(spot.id);
-      });
+        onFreeSelectRef.current(spot.id);
+      };
+      el.addEventListener("click", openFree);
+      el.addEventListener("touchend", openFree, { passive: false });
       freeMarkersRef.current.push(marker);
     });
-  }, [onFreeSelect]);
+  }, []);
 
   return (
-    <div ref={containerRef} className="absolute inset-0 h-full w-full" aria-label="Kaart Enschede" />
+    <div
+      ref={containerRef}
+      className="absolute inset-0 h-full w-full touch-pan-x touch-pan-y"
+      aria-label="Kaart Enschede"
+    />
   );
 }
