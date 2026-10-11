@@ -55,6 +55,8 @@ type ParkingMapProps = {
     kind: "paid" | "permit";
     zoneRaw: string | null;
     gebiedCod: string | null;
+    lon?: number;
+    lat?: number;
   }) => void;
   onGarageSelect: (garage: GarageMarkerData) => void;
   onPnrSelect: () => void;
@@ -62,7 +64,7 @@ type ParkingMapProps = {
   stadserfBoundary: FeatureCollection | null;
   destination: { lon: number; lat: number } | null;
   flyTo: { lon: number; lat: number; token: number } | null;
-  onMapBackgroundClick: () => void;
+  onMapBackgroundClick: (payload: { lon: number; lat: number }) => void;
   recenterToken: number;
   activeZoneLabelKey: string | null;
   selectedZoneKey: string | null;
@@ -123,6 +125,30 @@ function applyParkingFocusBasemap(map: MaplibreMap) {
   }
 }
 
+function paidLabelSizeAtZoom(
+  currentHover: number,
+  current: number,
+  hover: number,
+  base: number,
+): ExpressionSpecification {
+  return [
+    "case",
+    [
+      "all",
+      ["boolean", ["get", "emphasized"], false],
+      ["boolean", ["get", "labelHover"], false],
+    ],
+    currentHover,
+    ["boolean", ["get", "emphasized"], false],
+    current,
+    ["boolean", ["get", "labelHover"], false],
+    hover,
+    ["boolean", ["get", "labelSelected"], false],
+    hover,
+    base,
+  ];
+}
+
 const PAID_ZONE_LABEL_SIZE: ExpressionSpecification = [
   "interpolate",
   ["linear"],
@@ -130,15 +156,15 @@ const PAID_ZONE_LABEL_SIZE: ExpressionSpecification = [
   11,
   0,
   12,
-  ["case", ["boolean", ["get", "emphasized"], false], 34, 28],
+  paidLabelSizeAtZoom(38, 34, 31, 28),
   13.5,
-  ["case", ["boolean", ["get", "emphasized"], false], 46, 38],
+  paidLabelSizeAtZoom(50, 46, 42, 38),
   15,
-  ["case", ["boolean", ["get", "emphasized"], false], 58, 48],
+  paidLabelSizeAtZoom(64, 58, 53, 48),
   16.5,
-  ["case", ["boolean", ["get", "emphasized"], false], 68, 58],
+  paidLabelSizeAtZoom(74, 68, 63, 58),
   18,
-  ["case", ["boolean", ["get", "emphasized"], false], 78, 66],
+  paidLabelSizeAtZoom(84, 78, 72, 66),
 ];
 
 const PERMIT_ZONE_LABEL_SIZE: ExpressionSpecification = [
@@ -155,21 +181,33 @@ const PERMIT_ZONE_LABEL_SIZE: ExpressionSpecification = [
 
 const PAID_ZONE_LABEL_OPACITY: ExpressionSpecification = [
   "case",
+  [
+    "all",
+    ["boolean", ["get", "emphasized"], false],
+    ["boolean", ["get", "labelHover"], false],
+  ],
+  0.96,
   ["boolean", ["get", "emphasized"], false],
   0.9,
+  ["boolean", ["get", "labelHover"], false],
+  0.8,
   ["boolean", ["get", "labelSelected"], false],
   0.78,
-  ["boolean", ["get", "labelHover"], false],
-  0.72,
   0.62,
 ];
 
 const PAID_ZONE_LABEL_HALO_WIDTH: ExpressionSpecification = [
   "case",
+  [
+    "all",
+    ["boolean", ["get", "emphasized"], false],
+    ["boolean", ["get", "labelHover"], false],
+  ],
+  3.2,
   ["boolean", ["get", "emphasized"], false],
   2.8,
   ["boolean", ["get", "labelHover"], false],
-  2.35,
+  2.45,
   2,
 ];
 
@@ -186,7 +224,11 @@ function stylePaidZoneLabels(map: MaplibreMap) {
   map.setPaintProperty(id, "text-color", ["get", "textColor"]);
   map.setPaintProperty(id, "text-halo-color", [
     "case",
-    ["boolean", ["get", "emphasized"], false],
+    [
+      "any",
+      ["boolean", ["get", "emphasized"], false],
+      ["boolean", ["get", "labelHover"], false],
+    ],
     ZONE_LABEL_HALO_COLOR_ACTIVE,
     ZONE_LABEL_HALO_COLOR,
   ]);
@@ -289,48 +331,56 @@ function ensureZoneHighlightLayers(map: MaplibreMap, sourceId: ZoneSourceId) {
   const selectedEdgeId = `${sourceId}-selected-edge`;
 
   removeLegacyHighlightLayers(map, sourceId);
-
-  if (!map.getLayer(currentEdgeId) && map.getSource(sourceId)) {
-    map.addLayer(
-      {
-        id: currentEdgeId,
-        type: "line",
-        source: sourceId,
-        filter: ["==", ["feature-state", "current"], true],
-        paint: {
-          "line-color": ["get", "line"],
-          "line-width": sourceId === "permit-zones" ? 4 : 4.5,
-          "line-opacity": sourceId === "permit-zones" ? 0.08 : 0.1,
-          "line-blur": 1,
-          "line-width-transition": ZONE_PAINT_TRANSITION,
-          "line-opacity-transition": ZONE_PAINT_TRANSITION,
-        },
-      },
-      lineId,
-    );
+  for (const id of [currentEdgeId, selectedEdgeId]) {
+    if (map.getLayer(id)) map.removeLayer(id);
   }
+  if (!map.getSource(sourceId)) return;
 
-  if (!map.getLayer(selectedEdgeId) && map.getSource(sourceId)) {
-    map.addLayer(
-      {
-        id: selectedEdgeId,
-        type: "line",
-        source: sourceId,
-        filter: [
-          "all",
-          ["==", ["feature-state", "selected"], true],
-          ["!=", ["feature-state", "current"], true],
+  map.addLayer(
+    {
+      id: currentEdgeId,
+      type: "line",
+      source: sourceId,
+      paint: {
+        "line-color": ["get", "line"],
+        "line-width": sourceId === "permit-zones" ? 4 : 4.5,
+        "line-opacity": [
+          "case",
+          ["boolean", ["feature-state", "current"], false],
+          sourceId === "permit-zones" ? 0.08 : 0.1,
+          0,
         ],
-        paint: {
-          "line-color": "rgba(198, 208, 222, 0.65)",
-          "line-width": 1.5,
-          "line-opacity": 0.45,
-          "line-dasharray": [2, 2.5],
-        },
+        "line-blur": 1,
+        "line-width-transition": ZONE_PAINT_TRANSITION,
+        "line-opacity-transition": ZONE_PAINT_TRANSITION,
       },
-      lineId,
-    );
-  }
+    },
+    lineId,
+  );
+
+  map.addLayer(
+    {
+      id: selectedEdgeId,
+      type: "line",
+      source: sourceId,
+      paint: {
+        "line-color": "rgba(198, 208, 222, 0.65)",
+        "line-width": 1.5,
+        "line-opacity": [
+          "case",
+          [
+            "all",
+            ["boolean", ["feature-state", "selected"], false],
+            ["!", ["boolean", ["feature-state", "current"], false]],
+          ],
+          0.45,
+          0,
+        ],
+        "line-dasharray": [2, 2.5],
+      },
+    },
+    lineId,
+  );
 }
 
 function applyZoneLayerPaint(map: MaplibreMap, sourceId: ZoneSourceId) {
@@ -397,11 +447,7 @@ function syncLabelVisualState(
       const emphasized = currentKey != null && zoneKey === currentKey;
       const labelSelected =
         !emphasized && selectedKey != null && zoneKey === selectedKey;
-      const labelHover =
-        !emphasized &&
-        !labelSelected &&
-        hoveredZoneKey != null &&
-        zoneKey === hoveredZoneKey;
+      const labelHover = hoveredZoneKey != null && zoneKey === hoveredZoneKey;
       return {
         ...feature,
         properties: {
@@ -668,7 +714,9 @@ export function ParkingMap({
       if (!zoneHandlersBound.current) {
         zoneHandlersBound.current = true;
 
-        const onZoneLayerActivate = (e: { features?: MapGeoJSONFeature[] }) => {
+        const onZoneLayerActivate = (
+          e: MapMouseEvent & { features?: MapGeoJSONFeature[] },
+        ) => {
           const f = e.features?.[0];
           if (!f) return;
           const layerId = f.layer?.id ?? "";
@@ -677,6 +725,8 @@ export function ParkingMap({
             kind,
             zoneRaw: (f.properties?.ZONE as string) ?? null,
             gebiedCod: (f.properties?.GEBIED_COD as string) ?? null,
+            lon: e.lngLat.lng,
+            lat: e.lngLat.lat,
           });
         };
 
@@ -692,7 +742,10 @@ export function ParkingMap({
           const hits = map.queryRenderedFeatures(e.point, { layers: [...layers] });
           if (hits.length > 0) return;
           setHoveredZoneKey(map, null);
-          onMapBackgroundClickRef.current();
+          onMapBackgroundClickRef.current({
+            lon: e.lngLat.lng,
+            lat: e.lngLat.lat,
+          });
         });
       }
     };
@@ -816,11 +869,25 @@ export function ParkingMap({
           id: "stadserf-line",
           type: "line",
           source: "stadserf-boundary",
+          layout: {
+            "line-cap": "round",
+            "line-join": "round",
+          },
           paint: {
             "line-color": "#c084d4",
-            "line-width": 2.5,
-            "line-opacity": 0.72,
-            "line-dasharray": [2, 1.2],
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              12,
+              1.5,
+              14,
+              2.25,
+              16,
+              2.75,
+            ],
+            "line-opacity": 0.58,
+            "line-dasharray": [2.4, 1.8],
           },
         });
       } else {

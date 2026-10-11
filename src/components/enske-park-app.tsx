@@ -124,6 +124,9 @@ export function EnskeParkApp() {
     if (mapContext?.type === "destination" && mapContext.kind !== "outside") {
       return zoneCollectionKey(mapContext.kind, mapContext.zoneRaw);
     }
+    if (mapContext?.type === "point" && mapContext.kind !== "outside") {
+      return zoneCollectionKey(mapContext.kind, mapContext.zoneRaw);
+    }
     return null;
   }, [mapContext]);
 
@@ -135,6 +138,9 @@ export function EnskeParkApp() {
   const panelPoint = useMemo(() => {
     if (hoveredZone) return null;
     if (mapContext?.type === "destination") {
+      return { lon: mapContext.lon, lat: mapContext.lat };
+    }
+    if (mapContext?.type === "point") {
       return { lon: mapContext.lon, lat: mapContext.lat };
     }
     if (mapContext?.type === "zone" && mapContext.lon != null && mapContext.lat != null) {
@@ -161,6 +167,9 @@ export function EnskeParkApp() {
       return hasCountdown(mapContext.kind, mapContext.zoneRaw);
     }
     if (mapContext?.type === "destination") {
+      return hasCountdown(mapContext.kind, mapContext.zoneRaw);
+    }
+    if (mapContext?.type === "point") {
       return hasCountdown(mapContext.kind, mapContext.zoneRaw);
     }
     return false;
@@ -199,12 +208,16 @@ export function EnskeParkApp() {
       kind: "paid" | "permit";
       zoneRaw: string | null;
       gebiedCod: string | null;
+      lon?: number;
+      lat?: number;
     }) => {
       setEstimatorOpen(false);
       setMapContext({
         type: "zone",
         kind: payload.kind,
         zoneRaw: payload.zoneRaw,
+        lon: payload.lon,
+        lat: payload.lat,
       });
     },
     [],
@@ -220,10 +233,37 @@ export function EnskeParkApp() {
     setMapContext({ type: "pnr" });
   }, []);
 
-  const handleMapBackgroundClick = useCallback(() => {
-    setHoveredZone(null);
-    clearContext();
-  }, [clearContext]);
+  const handleMapBackgroundClick = useCallback(
+    (payload: { lon: number; lat: number }) => {
+      setHoveredZone(null);
+      setEstimatorOpen(false);
+      setSearchOpen(false);
+      const match = locateUserInZones(
+        payload.lon,
+        payload.lat,
+        null,
+        zones,
+      );
+      if (match.kind === "paid" || match.kind === "permit") {
+        setMapContext({
+          type: "zone",
+          kind: match.kind,
+          zoneRaw: match.zoneRaw,
+          lon: payload.lon,
+          lat: payload.lat,
+        });
+        return;
+      }
+      setMapContext({
+        type: "point",
+        lon: payload.lon,
+        lat: payload.lat,
+        kind: "outside",
+        zoneRaw: null,
+      });
+    },
+    [zones],
+  );
 
   const handleZoneHoverChange = useCallback(
     (zone: { kind: "paid" | "permit"; zoneRaw: string | null } | null) => {

@@ -39,7 +39,7 @@ Leeg kaartgebied of ✕ → terug naar live GPS.
 1. GPS-positie  
 2. Huidige zone (highlight)  
 3. Betaalzones + zone-nummers  
-4. **Autoluwe binnenstad** (magenta lijn, indicatief — geen officiële GIS)  
+4. **Autoluwe binnenstad / stadserf** (magenta stippellijn — NDW zero-emissiezone, gelijk aan het stadserf)  
 5. Garages (**P** / **P 184** / **P VOL**)  
 6. **P+R Zuiderval** (`P+R` + €3)  
 7. Vergunningzones (rustig)  
@@ -142,7 +142,7 @@ Optioneel: `NEXT_PUBLIC_MAP_STYLE_URL` (zie `.env.example`).
 1. **Tarieven/tijden:** `tariffs.ts`  
 2. **Feestdagen:** `holidays-nl.ts` (soorten blijven leidend)  
 3. **Max. duur straten:** `duration-restrictions-data.ts` + bronvermelding  
-4. **Stadserf-lijn:** `stadserf-boundary-data.ts` (bijwerken als officiële vector beschikbaar komt)  
+4. **Stadserf-lijn:** `stadserf-boundary-data.ts` — buitenring van NDW `ZE Enschede`; opnieuw ophalen als de gemeente de zone wijzigt.  
 5. **P+R / garages:** `pnr-zuiderval.ts`, `garages.ts`, RDW-id’s  
 
 ---

@@ -401,6 +401,54 @@ export function ParkingContextPanel(props: ParkingContextPanelProps) {
     );
   }
 
+  if (mapContext?.type === "point") {
+    if (mapContext.kind === "outside") {
+      return (
+        <StatusModule
+          left="—"
+          center="GEEN BETAALZONE"
+          right="GRATIS"
+          rightMode="free"
+          secondary="Buiten gemeentelijke betaalzone"
+          tone="neutral"
+          onClear={onClearContext}
+        />
+      );
+    }
+    const snap = resolveParkingAtLocation(mapContext.kind, mapContext.zoneRaw, clock);
+    const cells = parkingModuleCells(
+      mapContext.kind,
+      snap,
+      mapContext.zoneRaw,
+      false,
+      false,
+      false,
+      germanHoliday,
+      busyUpgrade,
+      durationRestriction,
+      clock,
+    );
+    return (
+      <StatusModule
+        {...cells}
+        onClear={onClearContext}
+        onRateClick={
+          cells.rateTappable ? () => onEstimatorOpenChange(true) : undefined
+        }
+      >
+        {estimatorOpen && snap.zone && clock && (
+          <ParkingEstimator
+            zone={snap.zone}
+            lon={panelLon}
+            lat={panelLat}
+            clock={clock}
+            onClose={() => onEstimatorOpenChange(false)}
+          />
+        )}
+      </StatusModule>
+    );
+  }
+
   if (mapContext?.type === "destination") {
     const d = mapContext;
     const snap = resolveParkingAtLocation(d.kind, d.zoneRaw, clock);

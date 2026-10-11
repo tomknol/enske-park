@@ -20,6 +20,13 @@ export type MapPanelContext =
       lat: number;
       kind: "paid" | "permit" | "outside";
       zoneRaw: string | null;
+    }
+  | {
+      type: "point";
+      lon: number;
+      lat: number;
+      kind: "paid" | "permit" | "outside";
+      zoneRaw: string | null;
     };
 
 export function isLiveContext(ctx: MapPanelContext | null): boolean {
