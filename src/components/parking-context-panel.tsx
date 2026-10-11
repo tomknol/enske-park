@@ -6,18 +6,11 @@ import { X } from "lucide-react";
 import type { GarageMarkerData } from "@/components/parking-map";
 import type { LocationKind, ParkingSnapshot } from "@/lib/parking-status";
 import { resolveParkingAtLocation } from "@/lib/parking-status";
-import {
-  CENTRE_OUDE_MARKT,
-  FREE_PARKING_SPOTS,
-  directionsUrl,
-} from "@/lib/free-parking";
 import { formatEuro, paidScheduleForZone, type PaidZoneId } from "@/lib/tariffs";
-import { walkingSummary } from "@/lib/walking";
 
 export type SelectedMapFeature =
   | { type: "zone"; kind: "paid" | "permit"; zoneRaw: string | null }
   | { type: "garage"; garage: GarageMarkerData }
-  | { type: "free"; spotId: string }
   | { type: "info" };
 
 type ParkingContextPanelProps = {
@@ -34,6 +27,8 @@ type ParkingContextPanelProps = {
   germanHoliday: boolean;
   busyUpgrade: boolean;
   selected: SelectedMapFeature | null;
+  /** Desktop: zone under cursor — temporary preview in the top module. */
+  hoveredZone: { kind: "paid" | "permit"; zoneRaw: string | null } | null;
   onClearSelection: () => void;
   clock?: Date;
 };
@@ -235,6 +230,7 @@ export function ParkingContextPanel({
   germanHoliday,
   busyUpgrade,
   selected,
+  hoveredZone,
   onClearSelection,
   clock,
 }: ParkingContextPanelProps) {
@@ -267,6 +263,29 @@ export function ParkingContextPanel({
         </button>
       </StatusModule>
     );
+  }
+
+  if (hoveredZone) {
+    const kind = hoveredZone.kind === "permit" ? "permit" : "paid";
+    const snap = resolveParkingAtLocation(hoveredZone.kind, hoveredZone.zoneRaw, clock);
+    const cells = parkingModuleCells(
+      kind,
+      snap,
+      hoveredZone.zoneRaw,
+      false,
+      false,
+      false,
+      false,
+      false,
+    );
+    cells.secondary =
+      snap.isPaidNow && kind === "paid"
+        ? "Zone onder de muis · betaald parkeren"
+        : kind === "permit"
+          ? "Zone onder de muis · vergunning"
+          : "Zone onder de muis · gratis parkeren";
+    cells.tone = panelToneFromParking(kind, snap, false);
+    return <StatusModule {...cells} />;
   }
 
   if (selected?.type === "info") {
@@ -328,55 +347,6 @@ export function ParkingContextPanel({
         secondary={secondary}
         onClear={onClearSelection}
       />
-    );
-  }
-
-  if (selected?.type === "free") {
-    const spot = FREE_PARKING_SPOTS.find((s) => s.id === selected.spotId);
-    if (!spot) {
-      return (
-        <StatusModule
-          left="—"
-          center="GRATIS"
-          right="—"
-          secondary="Gratis parkeersuggestie"
-          onClear={onClearSelection}
-        />
-      );
-    }
-    const walk = walkingSummary(
-      spot.lon,
-      spot.lat,
-      CENTRE_OUDE_MARKT.lon,
-      CENTRE_OUDE_MARKT.lat,
-    );
-    const route = directionsUrl(spot.lat, spot.lon);
-    const name = spot.name.split(" (")[0];
-    const shortName = name.length > 14 ? `${name.slice(0, 12)}…` : name;
-
-    return (
-      <div className="park-panel pointer-events-auto" data-tone="free">
-        <PanelClose onClear={onClearSelection} />
-        <div className="park-module-row">
-          <div className="park-module-col park-module-col--left">
-            <span className="park-module-time tabular-nums">{walk.replace(" lopen", "")}</span>
-          </div>
-          <div className="park-module-col park-module-col--center">
-            <span className="park-module-zone">{shortName.toUpperCase()}</span>
-          </div>
-          <div className="park-module-col park-module-col--right">
-            <a
-              href={route}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="park-module-price park-panel-link tabular-nums"
-            >
-              Route →
-            </a>
-          </div>
-        </div>
-        <p className="park-module-secondary">Gratis parkeren · controleer borden ter plaatse</p>
-      </div>
     );
   }
 

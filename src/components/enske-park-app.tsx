@@ -13,7 +13,7 @@ import { useGeolocation } from "@/hooks/use-geolocation";
 import { useStableUserZone } from "@/hooks/use-stable-user-zone";
 import { isRelevantGermanHoliday } from "@/lib/holidays-de";
 import { resolveParkingAtLocation } from "@/lib/parking-status";
-import { activeZoneLabelKey } from "@/lib/zone-labels";
+import { activeZoneLabelKey, zoneCollectionKey } from "@/lib/zone-labels";
 import { locateUserInZones, type ZoneCollections } from "@/lib/zones";
 
 const ParkingMap = dynamic(
@@ -39,6 +39,10 @@ export function EnskeParkApp() {
   const [selectedMapFeature, setSelectedMapFeature] = useState<SelectedMapFeature | null>(
     null,
   );
+  const [hoveredZone, setHoveredZone] = useState<{
+    kind: "paid" | "permit";
+    zoneRaw: string | null;
+  } | null>(null);
   const [clock, setClock] = useState<Date | null>(null);
 
   useEffect(() => {
@@ -119,6 +123,12 @@ export function EnskeParkApp() {
     [userZone.kind, userZone.zoneRaw],
   );
 
+  const selectedZoneKey = useMemo(() => {
+    const s = selectedMapFeature;
+    if (!s || s.type !== "zone") return null;
+    return zoneCollectionKey(s.kind, s.zoneRaw);
+  }, [selectedMapFeature]);
+
   const snapshot = useMemo(
     () => resolveParkingAtLocation(userZone.kind, userZone.zoneRaw, clock ?? undefined),
     [userZone.kind, userZone.zoneRaw, clock],
@@ -153,12 +163,16 @@ export function EnskeParkApp() {
   const handleGarageSelect = useCallback((garage: GarageMarkerData) => {
     setSelectedMapFeature({ type: "garage", garage });
   }, []);
-  const handleFreeSelect = useCallback((spotId: string) => {
-    setSelectedMapFeature({ type: "free", spotId });
-  }, []);
   const handleMapBackgroundClick = useCallback(() => {
     setSelectedMapFeature((current) => (current ? null : current));
   }, []);
+
+  const handleZoneHoverChange = useCallback(
+    (zone: { kind: "paid" | "permit"; zoneRaw: string | null } | null) => {
+      setHoveredZone(zone);
+    },
+    [],
+  );
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-[var(--background)]">
@@ -171,10 +185,11 @@ export function EnskeParkApp() {
         garages={garages}
         onZoneSelect={handleZoneSelect}
         onGarageSelect={handleGarageSelect}
-        onFreeSelect={handleFreeSelect}
         onMapBackgroundClick={handleMapBackgroundClick}
         recenterToken={recenterToken}
         activeZoneLabelKey={currentZoneLabelKey}
+        selectedZoneKey={selectedZoneKey}
+        onZoneHoverChange={handleZoneHoverChange}
       />
 
       <div
@@ -197,6 +212,7 @@ export function EnskeParkApp() {
           germanHoliday={germanHoliday}
           busyUpgrade={busyUpgrade}
           selected={selectedMapFeature}
+          hoveredZone={hoveredZone}
           onClearSelection={clearSelection}
           clock={clock ?? undefined}
         />

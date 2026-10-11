@@ -8,18 +8,32 @@ import {
   setWorkerUrl,
   type ExpressionSpecification,
   type MapGeoJSONFeature,
+  type MapMouseEvent,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef } from "react";
 import type { FeatureCollection } from "geojson";
-import { buildZoneLabelPoints, ZONE_LABEL_FONT } from "@/lib/zone-labels";
 import {
-  zoneFillColor,
-  zoneLineColor,
-  type ZoneCollections,
-} from "@/lib/zones";
+  buildZoneLabelPoints,
+  parseZoneCollectionKey,
+  ZONE_LABEL_FONT,
+} from "@/lib/zone-labels";
+import type { ZoneCollections } from "@/lib/zones";
+import {
+  computeZoneFeatureState,
+  enrichZoneCollections,
+  PERMIT_FILL_OPACITY,
+  PERMIT_LINE_OPACITY,
+  PERMIT_LINE_WIDTH,
+  ZONE_FILL_OPACITY,
+  ZONE_LINE_OPACITY,
+  ZONE_LINE_WIDTH,
+  ZONE_HOVER_TRANSITION,
+  ZONE_PAINT_TRANSITION,
+  type ZoneSourceId,
+  type ZoneStateTarget,
+} from "@/lib/zone-map-highlight";
 import { formatGarageMarkerLabel, type GarageOccupancyLevel } from "@/lib/garages";
-import { FREE_PARKING_SPOTS } from "@/lib/free-parking";
 import { MAP_STYLE_URL } from "@/lib/map-theme";
 import type { GeoPosition } from "@/hooks/use-geolocation";
 
@@ -48,13 +62,23 @@ type ParkingMapProps = {
     gebiedCod: string | null;
   }) => void;
   onGarageSelect: (garage: GarageMarkerData) => void;
-  onFreeSelect: (spotId: string) => void;
   onMapBackgroundClick: () => void;
   recenterToken: number;
+  /** Stable GPS zone (`paid:4`, `permit:…`) — drives current-zone emphasis. */
   activeZoneLabelKey: string | null;
+  /** Tapped zone — secondary outline only; never replaces GPS highlight. */
+  selectedZoneKey: string | null;
+  /** Desktop hover preview — fires only when the hovered zone changes. */
+  onZoneHoverChange?: (
+    zone: { kind: "paid" | "permit"; zoneRaw: string | null } | null,
+  ) => void;
 };
 
 const ZONE_CLICK_LAYERS = ["paid-zones-fill", "permit-zones-fill"] as const;
+
+const DESKTOP_ZONE_HOVER =
+  typeof window !== "undefined" &&
+  window.matchMedia("(hover: hover) and (pointer: fine)").matches;
 
 const DEFAULT_CENTER: [number, number] = [6.8937, 52.2215];
 const MAPLIBRE_WORKER_URL =
@@ -63,13 +87,9 @@ const MAPLIBRE_WORKER_URL =
 /** Keep the map strictly 2D / north-up top view. */
 const FLAT_CAMERA = { pitch: 0, bearing: 0 } as const;
 
-const ZONE_LABEL_HALO_COLOR = "rgba(12, 16, 24, 0.55)";
-const ZONE_LABEL_HALO_WIDTH: ExpressionSpecification = [
-  "case",
-  ["boolean", ["get", "emphasized"], false],
-  2.8,
-  2.2,
-];
+const ZONE_LABEL_HALO_COLOR = "rgba(8, 10, 14, 0.62)";
+
+const PERMIT_LABEL_MIN_ZOOM = 14.75;
 
 function applyFlatMapStyle(map: MaplibreMap) {
   const style = map.getStyle();
@@ -94,10 +114,10 @@ function applyParkingFocusBasemap(map: MaplibreMap) {
         id.includes("road") || id.includes("street") || id.includes("highway");
       try {
         if (isPoi) {
-          map.setPaintProperty(layer.id, "text-opacity", 0.32);
-          map.setPaintProperty(layer.id, "icon-opacity", 0.22);
+          map.setPaintProperty(layer.id, "text-opacity", 0.26);
+          map.setPaintProperty(layer.id, "icon-opacity", 0.18);
         } else if (isRoadLabel) {
-          map.setPaintProperty(layer.id, "text-opacity", 0.55);
+          map.setPaintProperty(layer.id, "text-opacity", 0.48);
         }
       } catch {
         /* layer may not expose these paints */
@@ -106,39 +126,75 @@ function applyParkingFocusBasemap(map: MaplibreMap) {
   }
 }
 
-const ZONE_LABEL_SIZE: ExpressionSpecification = [
+const PAID_ZONE_LABEL_SIZE: ExpressionSpecification = [
   "interpolate",
   ["linear"],
   ["zoom"],
   11,
   0,
   12,
-  ["case", ["boolean", ["get", "emphasized"], false], 26, 22],
+  ["case", ["boolean", ["get", "emphasized"], false], 28, 24],
   13.5,
-  ["case", ["boolean", ["get", "emphasized"], false], 34, 28],
+  ["case", ["boolean", ["get", "emphasized"], false], 38, 32],
   15,
-  ["case", ["boolean", ["get", "emphasized"], false], 44, 36],
+  ["case", ["boolean", ["get", "emphasized"], false], 48, 40],
   16.5,
-  ["case", ["boolean", ["get", "emphasized"], false], 52, 44],
+  ["case", ["boolean", ["get", "emphasized"], false], 56, 48],
   18,
-  ["case", ["boolean", ["get", "emphasized"], false], 58, 48],
+  ["case", ["boolean", ["get", "emphasized"], false], 64, 54],
 ];
 
-const ZONE_LABEL_OPACITY: ExpressionSpecification = [
+const PERMIT_ZONE_LABEL_SIZE: ExpressionSpecification = [
+  "interpolate",
+  ["linear"],
+  ["zoom"],
+  PERMIT_LABEL_MIN_ZOOM,
+  0,
+  PERMIT_LABEL_MIN_ZOOM + 0.5,
+  11,
+  16,
+  12,
+];
+
+const PAID_ZONE_LABEL_OPACITY: ExpressionSpecification = [
   "case",
   ["boolean", ["get", "emphasized"], false],
-  0.88,
+  0.9,
+  ["boolean", ["get", "labelSelected"], false],
+  0.78,
+  ["boolean", ["get", "labelHover"], false],
+  0.72,
   0.62,
 ];
 
-const GARAGE_COUNT_MIN_ZOOM = 14.25;
-const FREE_MARKER_MIN_ZOOM = 13.25;
+const PAID_ZONE_LABEL_HALO_WIDTH: ExpressionSpecification = [
+  "case",
+  ["boolean", ["get", "emphasized"], false],
+  2.8,
+  ["boolean", ["get", "labelHover"], false],
+  2.35,
+  2,
+];
+
+const PERMIT_ZONE_LABEL_OPACITY = 0.42;
+
+const ZONE_LABEL_HALO_COLOR_ACTIVE = "rgba(255, 255, 255, 0.16)";
+
+const GARAGE_COUNT_MIN_ZOOM = 14.5;
 
 function syncGarageMarkerAppearance(el: HTMLButtonElement, g: GarageMarkerData, zoom: number) {
+  const zoomedIn = zoom >= GARAGE_COUNT_MIN_ZOOM;
+  const showFull = zoomedIn && g.live && g.level === "full";
   const showCount =
-    zoom >= GARAGE_COUNT_MIN_ZOOM && g.live && g.vacant != null && g.level !== "full";
-  el.className = showCount ? "garage-map-marker" : "garage-map-marker garage-map-marker--compact";
-  el.textContent = showCount ? `P ${g.vacant}` : "P";
+    zoomedIn && g.live && g.vacant != null && g.level !== "full";
+  el.className = [
+    "garage-map-marker",
+    showCount || showFull ? "" : "garage-map-marker--compact",
+    showFull ? "garage-map-marker--full" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  el.textContent = showFull ? "P VOL" : showCount ? `P ${g.vacant}` : "P";
   el.setAttribute(
     "aria-label",
     `${g.label}, ${g.live ? formatGarageMarkerLabel(g.level, g.vacant) : "Live bezetting onbekend"}`,
@@ -152,45 +208,243 @@ function createGarageMarkerElement(g: GarageMarkerData, zoom: number): HTMLButto
   return el;
 }
 
-function applyZoneLabelLayerStyle(map: MaplibreMap) {
-  if (!map.getLayer("zone-labels")) return;
-  map.setLayoutProperty("zone-labels", "text-field", ["get", "label"]);
-  map.setLayoutProperty("zone-labels", "text-font", [...ZONE_LABEL_FONT]);
-  map.setLayoutProperty("zone-labels", "text-anchor", "center");
-  map.setLayoutProperty("zone-labels", "text-allow-overlap", true);
-  map.setLayoutProperty("zone-labels", "text-ignore-placement", true);
-  map.setLayoutProperty("zone-labels", "text-optional", false);
-  map.setLayoutProperty("zone-labels", "text-size", ZONE_LABEL_SIZE);
-  map.setPaintProperty("zone-labels", "text-color", ["get", "textColor"]);
-  map.setPaintProperty("zone-labels", "text-halo-color", ZONE_LABEL_HALO_COLOR);
-  map.setPaintProperty("zone-labels", "text-halo-width", ZONE_LABEL_HALO_WIDTH);
-  map.setPaintProperty("zone-labels", "text-opacity", ZONE_LABEL_OPACITY);
+function stylePaidZoneLabels(map: MaplibreMap) {
+  const id = "zone-labels-paid";
+  if (!map.getLayer(id)) return;
+  map.setLayoutProperty(id, "text-field", ["get", "label"]);
+  map.setLayoutProperty(id, "text-font", [...ZONE_LABEL_FONT]);
+  map.setLayoutProperty(id, "text-size", PAID_ZONE_LABEL_SIZE);
+  map.setPaintProperty(id, "text-color", ["get", "textColor"]);
+  map.setPaintProperty(id, "text-halo-color", [
+    "case",
+    ["boolean", ["get", "emphasized"], false],
+    ZONE_LABEL_HALO_COLOR_ACTIVE,
+    ZONE_LABEL_HALO_COLOR,
+  ]);
+  map.setPaintProperty(id, "text-halo-width", PAID_ZONE_LABEL_HALO_WIDTH);
+  map.setPaintProperty(id, "text-opacity", PAID_ZONE_LABEL_OPACITY);
 }
 
-function enrichCollections(zones: ZoneCollections) {
-  const paid: FeatureCollection = {
-    type: "FeatureCollection",
-    features: zones.paid.features.map((f) => ({
-      ...f,
-      properties: {
-        ...f.properties,
-        fill: zoneFillColor(f.properties?.ZONE ?? null, "paid"),
-        line: zoneLineColor(f.properties?.ZONE ?? null, "paid"),
+function stylePermitZoneLabels(map: MaplibreMap) {
+  const id = "zone-labels-permit";
+  if (!map.getLayer(id)) return;
+  map.setLayoutProperty(id, "text-field", ["get", "label"]);
+  map.setLayoutProperty(id, "text-font", [...ZONE_LABEL_FONT]);
+  map.setLayoutProperty(id, "text-size", PERMIT_ZONE_LABEL_SIZE);
+  map.setPaintProperty(id, "text-color", ["get", "textColor"]);
+  map.setPaintProperty(id, "text-halo-color", ZONE_LABEL_HALO_COLOR);
+  map.setPaintProperty(id, "text-halo-width", 1.4);
+  map.setPaintProperty(id, "text-opacity", PERMIT_ZONE_LABEL_OPACITY);
+}
+
+function applyZoneLabelLayerStyle(map: MaplibreMap) {
+  stylePaidZoneLabels(map);
+  stylePermitZoneLabels(map);
+}
+
+function removeLegacyLabelLayer(map: MaplibreMap) {
+  if (map.getLayer("zone-labels")) map.removeLayer("zone-labels");
+}
+
+function ensureZoneLabelLayers(map: MaplibreMap, data: FeatureCollection) {
+  removeLegacyLabelLayer(map);
+
+  if (!map.getSource("zone-label-points")) {
+    map.addSource("zone-label-points", {
+      type: "geojson",
+      data,
+      promoteId: "labelId",
+    });
+  }
+
+  if (!map.getLayer("zone-labels-paid")) {
+    map.addLayer({
+      id: "zone-labels-paid",
+      type: "symbol",
+      source: "zone-label-points",
+      minzoom: 11,
+      filter: ["==", ["get", "layer"], "paid"],
+      layout: {
+        "text-field": ["get", "label"],
+        "text-font": [...ZONE_LABEL_FONT],
+        "text-anchor": "center",
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+        "text-optional": false,
+        "text-size": PAID_ZONE_LABEL_SIZE,
       },
-    })),
-  };
-  const permit: FeatureCollection = {
-    type: "FeatureCollection",
-    features: zones.permit.features.map((f) => ({
-      ...f,
-      properties: {
-        ...f.properties,
-        fill: zoneFillColor(f.properties?.ZONE ?? null, "permit"),
-        line: zoneLineColor(f.properties?.ZONE ?? null, "permit"),
+      paint: {
+        "text-color": ["get", "textColor"],
+        "text-halo-color": ZONE_LABEL_HALO_COLOR,
+        "text-halo-width": PAID_ZONE_LABEL_HALO_WIDTH,
+        "text-opacity": PAID_ZONE_LABEL_OPACITY,
       },
-    })),
+    });
+  }
+
+  if (!map.getLayer("zone-labels-permit")) {
+    map.addLayer({
+      id: "zone-labels-permit",
+      type: "symbol",
+      source: "zone-label-points",
+      minzoom: PERMIT_LABEL_MIN_ZOOM,
+      filter: ["==", ["get", "layer"], "permit"],
+      layout: {
+        "text-field": ["get", "label"],
+        "text-font": [...ZONE_LABEL_FONT],
+        "text-anchor": "center",
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+        "text-optional": false,
+        "text-size": PERMIT_ZONE_LABEL_SIZE,
+      },
+      paint: {
+        "text-color": ["get", "textColor"],
+        "text-halo-color": ZONE_LABEL_HALO_COLOR,
+        "text-halo-width": 1.4,
+        "text-opacity": PERMIT_ZONE_LABEL_OPACITY,
+      },
+    });
+  }
+}
+
+function removeLegacyHighlightLayers(map: MaplibreMap, sourceId: ZoneSourceId) {
+  for (const id of [`${sourceId}-active-halo`, `${sourceId}-active-lift`] as const) {
+    if (map.getLayer(id)) map.removeLayer(id);
+  }
+}
+
+function ensureZoneHighlightLayers(map: MaplibreMap, sourceId: ZoneSourceId) {
+  const lineId = `${sourceId}-line`;
+  const currentEdgeId = `${sourceId}-current-edge`;
+  const selectedEdgeId = `${sourceId}-selected-edge`;
+
+  removeLegacyHighlightLayers(map, sourceId);
+
+  if (!map.getLayer(currentEdgeId) && map.getSource(sourceId)) {
+    map.addLayer(
+      {
+        id: currentEdgeId,
+        type: "line",
+        source: sourceId,
+        filter: ["==", ["feature-state", "current"], true],
+        paint: {
+          "line-color": ["get", "line"],
+          "line-width": sourceId === "permit-zones" ? 4 : 4.5,
+          "line-opacity": sourceId === "permit-zones" ? 0.08 : 0.1,
+          "line-blur": 1,
+          "line-width-transition": ZONE_PAINT_TRANSITION,
+          "line-opacity-transition": ZONE_PAINT_TRANSITION,
+        },
+      },
+      lineId,
+    );
+  }
+
+  if (!map.getLayer(selectedEdgeId) && map.getSource(sourceId)) {
+    map.addLayer(
+      {
+        id: selectedEdgeId,
+        type: "line",
+        source: sourceId,
+        filter: [
+          "all",
+          ["==", ["feature-state", "selected"], true],
+          ["!=", ["feature-state", "current"], true],
+        ],
+        paint: {
+          "line-color": "rgba(198, 208, 222, 0.65)",
+          "line-width": 1.5,
+          "line-opacity": 0.45,
+          "line-dasharray": [2, 2.5],
+        },
+      },
+      lineId,
+    );
+  }
+}
+
+function applyZoneLayerPaint(map: MaplibreMap, sourceId: ZoneSourceId) {
+  const fillId = `${sourceId}-fill`;
+  const lineId = `${sourceId}-line`;
+  const isPermit = sourceId === "permit-zones";
+  if (map.getLayer(fillId)) {
+    map.setPaintProperty(
+      fillId,
+      "fill-opacity",
+      isPermit ? PERMIT_FILL_OPACITY : ZONE_FILL_OPACITY,
+    );
+    map.setPaintProperty(fillId, "fill-opacity-transition", ZONE_HOVER_TRANSITION);
+  }
+  if (map.getLayer(lineId)) {
+    map.setPaintProperty(
+      lineId,
+      "line-width",
+      isPermit ? PERMIT_LINE_WIDTH : ZONE_LINE_WIDTH,
+    );
+    map.setPaintProperty(
+      lineId,
+      "line-opacity",
+      isPermit ? PERMIT_LINE_OPACITY : ZONE_LINE_OPACITY,
+    );
+    map.setPaintProperty(lineId, "line-width-transition", ZONE_HOVER_TRANSITION);
+    map.setPaintProperty(lineId, "line-opacity-transition", ZONE_HOVER_TRANSITION);
+  }
+  ensureZoneHighlightLayers(map, sourceId);
+}
+
+function syncZoneFeatureStates(
+  map: MaplibreMap,
+  targets: ZoneStateTarget[],
+  currentKey: string | null,
+  selectedKey: string | null,
+  hoveredZoneKey: string | null,
+) {
+  for (const { sourceId, stateId, zoneKey } of targets) {
+    const state = computeZoneFeatureState(
+      zoneKey,
+      currentKey,
+      selectedKey,
+      hoveredZoneKey,
+    );
+    map.setFeatureState({ source: sourceId, id: stateId }, state);
+  }
+}
+
+function syncLabelVisualState(
+  map: MaplibreMap,
+  base: FeatureCollection | null,
+  currentKey: string | null,
+  selectedKey: string | null,
+  hoveredZoneKey: string | null,
+) {
+  const sourceId = "zone-label-points";
+  if (!map.getSource(sourceId) || !base) return;
+
+  const next: FeatureCollection = {
+    type: "FeatureCollection",
+    features: base.features.map((feature) => {
+      const zoneKey = feature.properties?.zoneKey as string | undefined;
+      const emphasized = currentKey != null && zoneKey === currentKey;
+      const labelSelected =
+        !emphasized && selectedKey != null && zoneKey === selectedKey;
+      const labelHover =
+        !emphasized &&
+        !labelSelected &&
+        hoveredZoneKey != null &&
+        zoneKey === hoveredZoneKey;
+      return {
+        ...feature,
+        properties: {
+          ...feature.properties,
+          emphasized,
+          labelSelected,
+          labelHover,
+        },
+      };
+    }),
   };
-  return { paid, permit };
+  (map.getSource(sourceId) as GeoJSONSource).setData(next);
 }
 
 export function ParkingMap({
@@ -201,15 +455,15 @@ export function ParkingMap({
   garages,
   onZoneSelect,
   onGarageSelect,
-  onFreeSelect,
   onMapBackgroundClick,
   recenterToken,
   activeZoneLabelKey,
+  selectedZoneKey,
+  onZoneHoverChange,
 }: ParkingMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MaplibreMap | null>(null);
   const garageMarkersRef = useRef<Marker[]>([]);
-  const freeMarkersRef = useRef<Marker[]>([]);
   const userMarkerRef = useRef<Marker | null>(null);
   const accuracySourceId = "user-accuracy";
   const zoneHandlersBound = useRef(false);
@@ -219,53 +473,75 @@ export function ParkingMap({
   const onUserMovedMapRef = useRef(onUserMovedMap);
   const onZoneSelectRef = useRef(onZoneSelect);
   const onGarageSelectRef = useRef(onGarageSelect);
-  const onFreeSelectRef = useRef(onFreeSelect);
   const onMapBackgroundClickRef = useRef(onMapBackgroundClick);
+  const onZoneHoverChangeRef = useRef(onZoneHoverChange);
   const activeZoneLabelKeyRef = useRef(activeZoneLabelKey);
+  const selectedZoneKeyRef = useRef(selectedZoneKey);
+  const zoneStateTargetsRef = useRef<ZoneStateTarget[]>([]);
+  const hoveredZoneKeyRef = useRef<string | null>(null);
+  const labelBaseRef = useRef<FeatureCollection | null>(null);
+  const zoneHoverHandlersBound = useRef(false);
   const mapBackgroundClickBound = useRef(false);
   const garagesVisualKeyRef = useRef("");
   const garageMarkerElsRef = useRef<Map<string, HTMLButtonElement>>(new Map());
   const garageByIdRef = useRef<Map<string, GarageMarkerData>>(new Map());
-  const freeMarkerElsRef = useRef<HTMLButtonElement[]>([]);
   const mapZoomRef = useRef(14);
 
   useEffect(() => {
     onUserMovedMapRef.current = onUserMovedMap;
     onZoneSelectRef.current = onZoneSelect;
     onGarageSelectRef.current = onGarageSelect;
-    onFreeSelectRef.current = onFreeSelect;
     onMapBackgroundClickRef.current = onMapBackgroundClick;
+    onZoneHoverChangeRef.current = onZoneHoverChange;
     activeZoneLabelKeyRef.current = activeZoneLabelKey;
+    selectedZoneKeyRef.current = selectedZoneKey;
   }, [
     onUserMovedMap,
     onZoneSelect,
     onGarageSelect,
-    onFreeSelect,
     onMapBackgroundClick,
+    onZoneHoverChange,
     activeZoneLabelKey,
+    selectedZoneKey,
   ]);
 
-  const syncLabelEmphasis = (map: MaplibreMap, activeKey: string | null) => {
-    const sourceId = "zone-label-points";
-    const base = labelPointsRef.current;
-    if (!map.getSource(sourceId) || !base) return;
+  const syncAllZoneVisualState = (map: MaplibreMap) => {
+    syncZoneFeatureStates(
+      map,
+      zoneStateTargetsRef.current,
+      activeZoneLabelKeyRef.current,
+      selectedZoneKeyRef.current,
+      hoveredZoneKeyRef.current,
+    );
+    syncLabelVisualState(
+      map,
+      labelBaseRef.current,
+      activeZoneLabelKeyRef.current,
+      selectedZoneKeyRef.current,
+      hoveredZoneKeyRef.current,
+    );
+  };
 
-    const next: FeatureCollection = {
-      type: "FeatureCollection",
-      features: base.features.map((feature) => {
-        const zoneKey = feature.properties?.zoneKey as string | undefined;
-        const emphasized = activeKey != null && zoneKey === activeKey;
-        return {
-          ...feature,
-          properties: {
-            ...feature.properties,
-            emphasized,
-          },
-        };
-      }),
-    };
-    labelPointsRef.current = next;
-    (map.getSource(sourceId) as GeoJSONSource).setData(next);
+  const notifyZoneHover = (zoneKey: string | null) => {
+    const cb = onZoneHoverChangeRef.current;
+    if (!cb) return;
+    if (!zoneKey) {
+      cb(null);
+      return;
+    }
+    const parsed = parseZoneCollectionKey(zoneKey);
+    if (!parsed) {
+      cb(null);
+      return;
+    }
+    cb({ kind: parsed.kind, zoneRaw: parsed.zoneRaw });
+  };
+
+  const setHoveredZoneKey = (map: MaplibreMap, zoneKey: string | null) => {
+    if (hoveredZoneKeyRef.current === zoneKey) return;
+    hoveredZoneKeyRef.current = zoneKey;
+    syncAllZoneVisualState(map);
+    notifyZoneHover(zoneKey);
   };
 
   useEffect(() => {
@@ -300,10 +576,6 @@ export function ParkingMap({
         const g = garageByIdRef.current.get(id);
         if (g) syncGarageMarkerAppearance(el, g, mapZoomRef.current);
       });
-      const showFree = mapZoomRef.current >= FREE_MARKER_MIN_ZOOM;
-      for (const el of freeMarkerElsRef.current) {
-        el.classList.toggle("free-map-marker--hidden", !showFree);
-      }
     };
     map.on("zoom", onZoom);
     map.on("load", onZoom);
@@ -326,6 +598,8 @@ export function ParkingMap({
       map.remove();
       mapRef.current = null;
       zoneHandlersBound.current = false;
+      zoneHoverHandlersBound.current = false;
+      hoveredZoneKeyRef.current = null;
       hasCenteredOnUser.current = false;
       zonesAppliedRef.current = null;
     };
@@ -338,23 +612,25 @@ export function ParkingMap({
     zonesAppliedRef.current = zones;
 
     const apply = () => {
-      const { paid, permit } = enrichCollections(zones);
+      const enriched = enrichZoneCollections(zones);
+      zoneStateTargetsRef.current = enriched.stateTargets;
 
       for (const [id, data] of [
-        ["paid-zones", paid],
-        ["permit-zones", permit],
+        ["permit-zones", enriched.permit],
+        ["paid-zones", enriched.paid],
       ] as const) {
         if (map.getSource(id)) {
           (map.getSource(id) as GeoJSONSource).setData(data);
+          applyZoneLayerPaint(map, id);
         } else {
-          map.addSource(id, { type: "geojson", data });
+          map.addSource(id, { type: "geojson", data, promoteId: "stateId" });
           map.addLayer({
             id: `${id}-fill`,
             type: "fill",
             source: id,
             paint: {
               "fill-color": ["get", "fill"],
-              "fill-opacity": 0.22,
+              "fill-opacity": ZONE_FILL_OPACITY,
             },
           });
           map.addLayer({
@@ -363,9 +639,11 @@ export function ParkingMap({
             source: id,
             paint: {
               "line-color": ["get", "line"],
-              "line-width": 1.25,
+              "line-width": ZONE_LINE_WIDTH,
+              "line-opacity": ZONE_LINE_OPACITY,
             },
           });
+          applyZoneLayerPaint(map, id);
         }
         if (map.getLayer(`${id}-label`)) {
           map.removeLayer(`${id}-label`);
@@ -374,40 +652,38 @@ export function ParkingMap({
 
       const labelPoints = buildZoneLabelPoints(zones);
       labelPointsRef.current = labelPoints;
+      labelBaseRef.current = labelPoints;
+      hoveredZoneKeyRef.current = null;
+      notifyZoneHover(null);
 
       if (map.getSource("zone-label-points")) {
         (map.getSource("zone-label-points") as GeoJSONSource).setData(labelPoints);
-        applyZoneLabelLayerStyle(map);
-      } else {
-        map.addSource("zone-label-points", {
-          type: "geojson",
-          data: labelPoints,
-          promoteId: "labelId",
-        });
-        map.addLayer({
-          id: "zone-labels",
-          type: "symbol",
-          source: "zone-label-points",
-          minzoom: 11,
-          layout: {
-            "text-field": ["get", "label"],
-            "text-font": [...ZONE_LABEL_FONT],
-            "text-anchor": "center",
-            "text-allow-overlap": true,
-            "text-ignore-placement": true,
-            "text-optional": false,
-            "text-size": ZONE_LABEL_SIZE,
-          },
-          paint: {
-            "text-color": ["get", "textColor"],
-            "text-halo-color": ZONE_LABEL_HALO_COLOR,
-            "text-halo-width": ZONE_LABEL_HALO_WIDTH,
-            "text-opacity": ZONE_LABEL_OPACITY,
-          },
-        });
       }
+      ensureZoneLabelLayers(map, labelPoints);
+      applyZoneLabelLayerStyle(map);
 
-      syncLabelEmphasis(map, activeZoneLabelKeyRef.current);
+      syncAllZoneVisualState(map);
+
+      if (!zoneHoverHandlersBound.current && DESKTOP_ZONE_HOVER) {
+        zoneHoverHandlersBound.current = true;
+
+        const onZonePointerMove = (e: MapMouseEvent) => {
+          const layers = ZONE_CLICK_LAYERS.filter((id) => map.getLayer(id));
+          if (layers.length === 0) return;
+          const hit = map.queryRenderedFeatures(e.point, { layers: [...layers] })[0];
+          const zoneKey = (hit?.properties?.zoneKey as string | undefined) ?? null;
+          map.getCanvas().style.cursor = zoneKey ? "pointer" : "";
+          setHoveredZoneKey(map, zoneKey);
+        };
+
+        const clearZoneHover = () => {
+          map.getCanvas().style.cursor = "";
+          setHoveredZoneKey(map, null);
+        };
+
+        map.on("mousemove", onZonePointerMove);
+        map.on("mouseout", clearZoneHover);
+      }
 
       if (!zoneHandlersBound.current) {
         zoneHandlersBound.current = true;
@@ -426,18 +702,6 @@ export function ParkingMap({
 
         map.on("click", "paid-zones-fill", onZoneLayerActivate);
         map.on("click", "permit-zones-fill", onZoneLayerActivate);
-        map.on("mouseenter", "paid-zones-fill", () => {
-          map.getCanvas().style.cursor = "pointer";
-        });
-        map.on("mouseleave", "paid-zones-fill", () => {
-          map.getCanvas().style.cursor = "";
-        });
-        map.on("mouseenter", "permit-zones-fill", () => {
-          map.getCanvas().style.cursor = "pointer";
-        });
-        map.on("mouseleave", "permit-zones-fill", () => {
-          map.getCanvas().style.cursor = "";
-        });
       }
 
       if (!mapBackgroundClickBound.current) {
@@ -458,9 +722,14 @@ export function ParkingMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !zones) return;
-    syncLabelEmphasis(map, activeZoneLabelKey);
-  }, [activeZoneLabelKey, zones]);
+    const zoneData = zonesAppliedRef.current;
+    if (!map || !zoneData) return;
+
+    const sync = () => syncAllZoneVisualState(map);
+
+    if (map.isStyleLoaded()) sync();
+    else map.once("load", sync);
+  }, [activeZoneLabelKey, selectedZoneKey, zones]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -587,38 +856,6 @@ export function ParkingMap({
       garageMarkersRef.current.push(marker);
     });
   }, [garages]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    freeMarkersRef.current.forEach((m) => m.remove());
-    freeMarkersRef.current = [];
-    freeMarkerElsRef.current = [];
-
-    FREE_PARKING_SPOTS.forEach((spot) => {
-      const el = document.createElement("button");
-      el.type = "button";
-      el.className = "free-map-marker";
-      if (mapZoomRef.current < FREE_MARKER_MIN_ZOOM) {
-        el.classList.add("free-map-marker--hidden");
-      }
-      el.textContent = "€0";
-      freeMarkerElsRef.current.push(el);
-      el.setAttribute("aria-label", `Gratis parkeren ${spot.name}`);
-      const marker = new Marker({ element: el, anchor: "center" })
-        .setLngLat([spot.lon, spot.lat])
-        .addTo(map);
-      const openFree = (ev: Event) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        onFreeSelectRef.current(spot.id);
-      };
-      el.addEventListener("click", openFree);
-      el.addEventListener("touchend", openFree, { passive: false });
-      freeMarkersRef.current.push(marker);
-    });
-  }, []);
 
   return (
     <div

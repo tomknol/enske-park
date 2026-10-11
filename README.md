@@ -1,6 +1,6 @@
 # Enske Park
 
-Mobiele parkeerutility voor Enschede: volledige kaart, live parkeerstatus op basis van je locatie, zone-tarieven, RDW-garagebezetting en handmatig gekozen gratis parkeersuggesties.
+Mobiele parkeerutility voor Enschede: volledige kaart, live parkeerstatus op basis van je locatie, zone-tarieven en RDW-garagebezetting.
 
 **Productie:** [enske-park.vercel.app](https://enske-park.vercel.app)
 
@@ -17,7 +17,6 @@ Geen accounts, geen database. Alle persoonlijke locatiegegevens blijven in de br
 - **Betaalzones** (gemeente) als gekleurde vlakken; **vergunningzones** apart gestyled.
 - **Zone-nummers** op de kaart (groot, leesbaar); de zone waar je nu in staat wordt visueel benadrukt zodra locatie bekend is.
 - **Garages** (centrum Enschede): compacte blauwe **P**-markers; bij inzoomen en live RDW-data toont de marker **P {aantal vrij}** of **P VOL**.
-- **Gratis parkeersuggesties**: vaste punten buiten de betaalzones (€0-markers), zichtbaar vanaf een bepaald zoomniveau.
 - **Desktop:** zoomknoppen rechtsonder. **Mobiel:** pinchen en slepen.
 - Knop **Naar mijn locatie** (rechtsonder): centreert de kaart opnieuw op GPS en hervat “volgen” na handmatig verschuiven.
 
@@ -27,11 +26,13 @@ Eén compact, donker paneel — de enige informatielaag boven de kaart.
 
 **Standaard:** je **huidige** parkeersituatie (GPS + zone + tarief), typografie-gedreven (zone-label, groot tarief/status, kleine secundaire regel).
 
-**Geselecteerd:** tik op een zone, garage of gratis parkeerplek → hetzelfde paneel toont details van die keuze. Sluiten via ✕ of tik op leeg kaartgebied → terug naar je locatiestatus (GPS-logica blijft ongewijzigd).
+**Geselecteerd:** tik op een zone of garage → hetzelfde paneel toont details van die keuze. Sluiten via ✕ of tik op leeg kaartgebied → terug naar je locatiestatus (GPS-logica blijft ongewijzigd).
+
+**Desktop:** beweeg de muis over een zone → het paneel toont een tijdelijke preview (“Zone onder de muis”) zonder je GPS-highlight te vervangen.
 
 | Actie | Resultaat |
 | --- | --- |
-| Tik op **zone / garage / gratis plek** | Detail in het statuspaneel |
+| Tik op **zone / garage** | Detail in het statuspaneel |
 | Tik op **leeg kaartgebied** | Selectie wissen |
 | **Info-knop** (rechtsonder) | Korte “Over Enske Park”-tekst in het paneel |
 
@@ -120,8 +121,7 @@ src/
     ├── zones.ts              # Polygon lookup, kleuren
     ├── zone-labels.ts        # Labelpunten & nadruk huidige zone
     ├── garages.ts            # RDW-id’s, bezettingsniveaus
-    ├── free-parking.ts       # Curated gratis plekken
-    ├── walking.ts            # Afstand/lopen naar centrum
+    ├── zone-map-highlight.ts # Feature-state: current / hover / selected
     ├── holidays-nl.ts / holidays-de.ts
     └── map-theme.ts          # Standaard style-URL
 public/
@@ -185,7 +185,6 @@ Na deploy: metadata en `metadataBase` wijzen naar `https://enske-park.vercel.app
 1. **Nieuwe parkeertarieven / tijden:** pas `src/lib/tariffs.ts` aan (`TARIFF_YEAR`, bedragen, schema’s).
 2. **Andere kaartstijl:** zet `NEXT_PUBLIC_MAP_STYLE_URL` (lokaal en op Vercel).
 3. **Garage toevoegen:** uitbreiden `ENSCHEDE_CENTRAL_GARAGES` in `src/lib/garages.ts` met RDW-facility-id.
-4. **Gratis plekken:** array in `src/lib/free-parking.ts` (controleren tegen GIS betaalzones).
 
 ---
 

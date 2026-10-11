@@ -150,17 +150,17 @@ export function zoneDisplayName(zoneRaw: string | null): string {
 }
 
 export function zoneFillColor(zoneRaw: string | null, layer: "paid" | "permit"): string {
-  if (layer === "permit") return "rgba(71, 112, 182, 0.28)";
+  if (layer === "permit") return "#4a72a8";
   const z = normalizeZoneId(zoneRaw);
-  if (z === "1" || z === "1B") return "rgba(127, 45, 58, 0.32)";
-  return "rgba(146, 98, 52, 0.28)";
+  if (z === "1" || z === "1B") return "#8f3d4a";
+  return "#9a6838";
 }
 
 export function zoneLineColor(zoneRaw: string | null, layer: "paid" | "permit"): string {
-  if (layer === "permit") return "rgba(125, 168, 230, 0.55)";
+  if (layer === "permit") return "#7a9ec8";
   const z = normalizeZoneId(zoneRaw);
-  if (z === "1" || z === "1B") return "rgba(196, 106, 118, 0.62)";
-  return "rgba(196, 142, 78, 0.58)";
+  if (z === "1" || z === "1B") return "#b8707c";
+  return "#b08850";
 }
 
 /** Island zone badge on dark liquid surfaces */
