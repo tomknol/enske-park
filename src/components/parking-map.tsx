@@ -3,12 +3,11 @@
 import {
   GeoJSONSource,
   Map as MaplibreMap,
-  Marker,
   NavigationControl,
   setWorkerUrl,
   type ExpressionSpecification,
-  type MapGeoJSONFeature,
   type MapMouseEvent,
+  type MapTouchEvent,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef } from "react";
@@ -35,13 +34,16 @@ import {
 } from "@/lib/zone-map-highlight";
 import type { GarageMarkerData } from "@/lib/garages";
 import {
-  createDestinationMarkerElement,
-  createGarageMarkerElement,
-  createPnrMarkerElement,
-  syncGarageMarkerAppearance,
-} from "@/lib/map-markers";
+  clearUserLocationData,
+  ensureMapOverlayLayers,
+  OVERLAY_HIT_LAYERS,
+  setDestinationOverlayData,
+  setGarageOverlayData,
+  setPnrOverlayData,
+  setUserLocationData,
+  whenStyleReady,
+} from "@/lib/map-overlays";
 import { MAP_STYLE_URL } from "@/lib/map-theme";
-import { PNR_ZUIDERVAL } from "@/lib/pnr-zuiderval";
 import type { GeoPosition } from "@/hooks/use-geolocation";
 
 export type { GarageMarkerData };
@@ -482,12 +484,6 @@ export function ParkingMap({
 }: ParkingMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MaplibreMap | null>(null);
-  const garageMarkersRef = useRef<Marker[]>([]);
-  const pnrMarkerRef = useRef<Marker | null>(null);
-  const destinationMarkerRef = useRef<Marker | null>(null);
-  const userMarkerRef = useRef<Marker | null>(null);
-  const accuracySourceId = "user-accuracy";
-  const zoneHandlersBound = useRef(false);
   const hasCenteredOnUser = useRef(false);
   const labelPointsRef = useRef<FeatureCollection | null>(null);
   const zonesAppliedRef = useRef<ZoneCollections | null>(null);
@@ -496,10 +492,7 @@ export function ParkingMap({
   const onGarageSelectRef = useRef(onGarageSelect);
   const onPnrSelectRef = useRef(onPnrSelect);
   const onMapBackgroundClickRef = useRef(onMapBackgroundClick);
-  const garageMarkerElsRef = useRef<Map<string, HTMLButtonElement>>(new Map());
   const garageByIdRef = useRef<Map<string, GarageMarkerData>>(new Map());
-  const garagesVisualKeyRef = useRef("");
-  const mapZoomRef = useRef(14);
   const onZoneHoverChangeRef = useRef(onZoneHoverChange);
   const activeZoneLabelKeyRef = useRef(activeZoneLabelKey);
   const selectedZoneKeyRef = useRef(selectedZoneKey);
@@ -507,7 +500,13 @@ export function ParkingMap({
   const hoveredZoneKeyRef = useRef<string | null>(null);
   const labelBaseRef = useRef<FeatureCollection | null>(null);
   const zoneHoverHandlersBound = useRef(false);
-  const mapBackgroundClickBound = useRef(false);
+  const activateMapPointRef = useRef<
+    (
+      map: MaplibreMap,
+      point: { x: number; y: number },
+      lngLat: { lng: number; lat: number },
+    ) => void
+  >(() => {});
   useEffect(() => {
     onUserMovedMapRef.current = onUserMovedMap;
     onZoneSelectRef.current = onZoneSelect;
@@ -567,6 +566,61 @@ export function ParkingMap({
     notifyZoneHover(zoneKey);
   };
 
+  const activateMapPoint = (
+    map: MaplibreMap,
+    point: { x: number; y: number },
+    lngLat: { lng: number; lat: number },
+  ) => {
+    const overlayLayers = OVERLAY_HIT_LAYERS.filter((id) => map.getLayer(id));
+    const screenPoint: [number, number] = [point.x, point.y];
+    if (overlayLayers.length > 0) {
+      const overlayHit = map.queryRenderedFeatures(screenPoint, {
+        layers: [...overlayLayers],
+      })[0];
+      if (overlayHit) {
+        const kind = overlayHit.properties?.kind as string | undefined;
+        if (kind === "garage") {
+          const id = overlayHit.properties?.id as string | undefined;
+          const garage = id ? garageByIdRef.current.get(id) : undefined;
+          if (garage) onGarageSelectRef.current(garage);
+          return;
+        }
+        if (kind === "pnr") {
+          onPnrSelectRef.current();
+          return;
+        }
+      }
+    }
+
+    const zoneLayers = ZONE_CLICK_LAYERS.filter((id) => map.getLayer(id));
+    if (zoneLayers.length > 0) {
+      const zoneHit = map.queryRenderedFeatures(screenPoint, {
+        layers: [...zoneLayers],
+      })[0];
+      if (zoneHit) {
+        const layerId = zoneHit.layer?.id ?? "";
+        onZoneSelectRef.current({
+          kind: layerId.startsWith("permit") ? "permit" : "paid",
+          zoneRaw: (zoneHit.properties?.ZONE as string) ?? null,
+          gebiedCod: (zoneHit.properties?.GEBIED_COD as string) ?? null,
+          lon: lngLat.lng,
+          lat: lngLat.lat,
+        });
+        return;
+      }
+    }
+
+    setHoveredZoneKey(map, null);
+    onMapBackgroundClickRef.current({
+      lon: lngLat.lng,
+      lat: lngLat.lat,
+    });
+  };
+
+  useEffect(() => {
+    activateMapPointRef.current = activateMapPoint;
+  });
+
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
@@ -593,21 +647,56 @@ export function ParkingMap({
       );
     }
 
-    const onZoom = () => {
-      mapZoomRef.current = map.getZoom();
-      garageMarkerElsRef.current.forEach((el, id) => {
-        const g = garageByIdRef.current.get(id);
-        if (g) syncGarageMarkerAppearance(el, g, mapZoomRef.current);
-      });
-    };
-    map.on("zoom", onZoom);
-    map.on("load", onZoom);
-
     map.touchZoomRotate.disableRotation();
-    map.on("load", () => {
+
+    let pendingTouch: {
+      point: { x: number; y: number };
+      lngLat: { lng: number; lat: number };
+      at: number;
+    } | null = null;
+
+    const onTouchEnd = (e: MapTouchEvent) => {
+      if (e.originalEvent.changedTouches.length !== 1) {
+        pendingTouch = null;
+        return;
+      }
+      pendingTouch = {
+        point: e.point,
+        lngLat: e.lngLat,
+        at: performance.now(),
+      };
+    };
+
+    const onMapClick = (e: MapMouseEvent) => {
+      const touch = pendingTouch;
+      pendingTouch = null;
+      const fromTouch = touch != null && performance.now() - touch.at < 450;
+      const point = fromTouch ? touch.point : e.point;
+      const lngLat = fromTouch ? touch.lngLat : e.lngLat;
+      activateMapPointRef.current(map, point, lngLat);
+    };
+
+    map.on("touchend", onTouchEnd);
+    map.on("click", onMapClick);
+
+    const onViewportResize = () => {
+      map.resize();
+    };
+    const resizeObserver = new ResizeObserver(() => {
+      map.resize();
+    });
+    resizeObserver.observe(map.getContainer());
+    window.visualViewport?.addEventListener("resize", onViewportResize);
+    window.addEventListener("orientationchange", onViewportResize);
+
+    const onStyleReady = () => {
       applyFlatMapStyle(map);
       applyParkingFocusBasemap(map);
-    });
+      ensureMapOverlayLayers(map);
+      setPnrOverlayData(map);
+      map.resize();
+    };
+    const stopStyleReady = whenStyleReady(map, onStyleReady);
     map.on("pitch", () => {
       if (map.getPitch() !== 0) map.setPitch(0);
     });
@@ -620,10 +709,14 @@ export function ParkingMap({
     mapRef.current = map;
 
     return () => {
-      map.off("zoom", onZoom);
+      stopStyleReady();
+      resizeObserver.disconnect();
+      window.visualViewport?.removeEventListener("resize", onViewportResize);
+      window.removeEventListener("orientationchange", onViewportResize);
+      map.off("touchend", onTouchEnd);
+      map.off("click", onMapClick);
       map.remove();
       mapRef.current = null;
-      zoneHandlersBound.current = false;
       zoneHoverHandlersBound.current = false;
       hoveredZoneKeyRef.current = null;
       hasCenteredOnUser.current = false;
@@ -687,6 +780,7 @@ export function ParkingMap({
       }
       ensureZoneLabelLayers(map, labelPoints);
       applyZoneLabelLayerStyle(map);
+      ensureMapOverlayLayers(map);
 
       syncAllZoneVisualState(map);
 
@@ -694,9 +788,23 @@ export function ParkingMap({
         zoneHoverHandlersBound.current = true;
 
         const onZonePointerMove = (e: MapMouseEvent) => {
+          const overlayLayers = OVERLAY_HIT_LAYERS.filter((id) => map.getLayer(id));
+          const overlayHit =
+            overlayLayers.length > 0
+              ? map.queryRenderedFeatures(e.point, {
+                  layers: [...overlayLayers],
+                })[0]
+              : undefined;
+          if (overlayHit) {
+            map.getCanvas().style.cursor = "pointer";
+            setHoveredZoneKey(map, null);
+            return;
+          }
           const layers = ZONE_CLICK_LAYERS.filter((id) => map.getLayer(id));
-          if (layers.length === 0) return;
-          const hit = map.queryRenderedFeatures(e.point, { layers: [...layers] })[0];
+          const hit =
+            layers.length > 0
+              ? map.queryRenderedFeatures(e.point, { layers: [...layers] })[0]
+              : undefined;
           const zoneKey = (hit?.properties?.zoneKey as string | undefined) ?? null;
           map.getCanvas().style.cursor = zoneKey ? "pointer" : "";
           setHoveredZoneKey(map, zoneKey);
@@ -710,48 +818,9 @@ export function ParkingMap({
         map.on("mousemove", onZonePointerMove);
         map.on("mouseout", clearZoneHover);
       }
-
-      if (!zoneHandlersBound.current) {
-        zoneHandlersBound.current = true;
-
-        const onZoneLayerActivate = (
-          e: MapMouseEvent & { features?: MapGeoJSONFeature[] },
-        ) => {
-          const f = e.features?.[0];
-          if (!f) return;
-          const layerId = f.layer?.id ?? "";
-          const kind = layerId.startsWith("permit") ? "permit" : "paid";
-          onZoneSelectRef.current({
-            kind,
-            zoneRaw: (f.properties?.ZONE as string) ?? null,
-            gebiedCod: (f.properties?.GEBIED_COD as string) ?? null,
-            lon: e.lngLat.lng,
-            lat: e.lngLat.lat,
-          });
-        };
-
-        map.on("click", "paid-zones-fill", onZoneLayerActivate);
-        map.on("click", "permit-zones-fill", onZoneLayerActivate);
-      }
-
-      if (!mapBackgroundClickBound.current) {
-        mapBackgroundClickBound.current = true;
-        map.on("click", (e) => {
-          const layers = ZONE_CLICK_LAYERS.filter((id) => map.getLayer(id));
-          if (layers.length === 0) return;
-          const hits = map.queryRenderedFeatures(e.point, { layers: [...layers] });
-          if (hits.length > 0) return;
-          setHoveredZoneKey(map, null);
-          onMapBackgroundClickRef.current({
-            lon: e.lngLat.lng,
-            lat: e.lngLat.lat,
-          });
-        });
-      }
     };
 
-    if (map.isStyleLoaded()) apply();
-    else map.once("load", apply);
+    return whenStyleReady(map, apply);
   }, [zones]);
 
   useEffect(() => {
@@ -761,88 +830,28 @@ export function ParkingMap({
 
     const sync = () => syncAllZoneVisualState(map);
 
-    if (map.isStyleLoaded()) sync();
-    else map.once("load", sync);
+    return whenStyleReady(map, sync);
   }, [activeZoneLabelKey, selectedZoneKey, zones]);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !position) return;
+    if (!map) return;
+
+    if (!position) {
+      return whenStyleReady(map, () => clearUserLocationData(map));
+    }
 
     const { lon, lat, accuracy } = position;
 
-    if (!userMarkerRef.current) {
-      const el = document.createElement("div");
-      el.className = "map-user-dot";
-      userMarkerRef.current = new Marker({ element: el }).setLngLat([lon, lat]).addTo(map);
-    } else {
-      userMarkerRef.current.setLngLat([lon, lat]);
-    }
-
-    const circle = {
-      type: "Feature" as const,
-      geometry: {
-        type: "Point" as const,
-        coordinates: [lon, lat],
-      },
-      properties: {},
-    };
-
-    const radiusM = Math.min(Math.max(accuracy, 8), 80);
-    const latRad = (lat * Math.PI) / 180;
-    const metersPerDegLat = 111320;
-    const metersPerDegLon = 111320 * Math.cos(latRad);
-    const dLat = radiusM / metersPerDegLat;
-    const dLon = radiusM / metersPerDegLon;
-    const ring = {
-      type: "Feature" as const,
-      geometry: {
-        type: "Polygon" as const,
-        coordinates: [
-          Array.from({ length: 64 }, (_, i) => {
-            const a = (i / 64) * Math.PI * 2;
-            return [lon + Math.cos(a) * dLon, lat + Math.sin(a) * dLat];
-          }),
-        ],
-      },
-      properties: {},
-    };
-
-    const upsert = () => {
-      if (!map.getSource(accuracySourceId)) {
-        map.addSource(accuracySourceId, {
-          type: "geojson",
-          data: { type: "FeatureCollection", features: [circle, ring] },
-        });
-        map.addLayer({
-          id: "user-accuracy-fill",
-          type: "fill",
-          source: accuracySourceId,
-          filter: ["==", ["geometry-type"], "Polygon"],
-          paint: { "fill-color": "#6eb0ff", "fill-opacity": 0.16 },
-        });
-        map.addLayer({
-          id: "user-accuracy-point",
-          type: "circle",
-          source: accuracySourceId,
-          filter: ["==", ["geometry-type"], "Point"],
-          paint: { "circle-radius": 0 },
-        });
-      } else {
-        (map.getSource(accuracySourceId) as GeoJSONSource).setData({
-          type: "FeatureCollection",
-          features: [circle, ring],
-        });
-      }
-    };
-
-    if (map.isStyleLoaded()) upsert();
-    else map.once("load", upsert);
+    const stop = whenStyleReady(map, () =>
+      setUserLocationData(map, lon, lat, accuracy),
+    );
 
     if (!hasCenteredOnUser.current) {
       map.easeTo({ center: [lon, lat], zoom: 16, duration: 600, ...FLAT_CAMERA });
       hasCenteredOnUser.current = true;
     }
+    return stop;
   }, [position]);
 
   useEffect(() => {
@@ -893,78 +902,31 @@ export function ParkingMap({
       } else {
         (map.getSource("stadserf-boundary") as GeoJSONSource).setData(stadserfBoundary);
       }
+      ensureMapOverlayLayers(map);
     };
-    if (map.isStyleLoaded()) apply();
-    else map.once("load", apply);
+    return whenStyleReady(map, apply);
   }, [stadserfBoundary]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    const visualKey = garages
-      .map((g) => `${g.id}:${g.live}:${g.level}:${g.vacant ?? "x"}`)
-      .join("|");
-    if (visualKey === garagesVisualKeyRef.current) return;
-    garagesVisualKeyRef.current = visualKey;
-
-    garageMarkersRef.current.forEach((m) => m.remove());
-    garageMarkersRef.current = [];
-    garageMarkerElsRef.current.clear();
     garageByIdRef.current.clear();
+    for (const g of garages) garageByIdRef.current.set(g.id, g);
 
-    garages.forEach((g) => {
-      if (g.lat == null || g.lon == null) return;
-      const el = createGarageMarkerElement(g, mapZoomRef.current);
-      garageMarkerElsRef.current.set(g.id, el);
-      garageByIdRef.current.set(g.id, g);
-      const marker = new Marker({ element: el, anchor: "center" })
-        .setLngLat([g.lon, g.lat])
-        .addTo(map);
-      const openGarage = (ev: Event) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        onGarageSelectRef.current(g);
-      };
-      el.addEventListener("click", openGarage);
-      el.addEventListener("touchend", openGarage, { passive: false });
-      garageMarkersRef.current.push(marker);
-    });
+    return whenStyleReady(map, () => setGarageOverlayData(map, garages));
   }, [garages]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (!pnrMarkerRef.current) {
-      const el = createPnrMarkerElement();
-      const open = (ev: Event) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        onPnrSelectRef.current();
-      };
-      el.addEventListener("click", open);
-      el.addEventListener("touchend", open, { passive: false });
-      pnrMarkerRef.current = new Marker({ element: el, anchor: "center" })
-        .setLngLat([PNR_ZUIDERVAL.lon, PNR_ZUIDERVAL.lat])
-        .addTo(map);
-    }
+    return whenStyleReady(map, () => setPnrOverlayData(map));
   }, []);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (!destination) {
-      destinationMarkerRef.current?.remove();
-      destinationMarkerRef.current = null;
-      return;
-    }
-    if (!destinationMarkerRef.current) {
-      destinationMarkerRef.current = new Marker({
-        element: createDestinationMarkerElement(),
-        anchor: "bottom",
-      }).addTo(map);
-    }
-    destinationMarkerRef.current.setLngLat([destination.lon, destination.lat]);
+    return whenStyleReady(map, () => setDestinationOverlayData(map, destination));
   }, [destination]);
 
   useEffect(() => {
@@ -981,7 +943,7 @@ export function ParkingMap({
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0 z-0 h-full w-full touch-pan-x touch-pan-y"
+      className="absolute inset-0 z-0 h-full w-full"
       aria-label="Kaart Enschede"
     />
   );
