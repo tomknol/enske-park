@@ -15,8 +15,14 @@ import { stadserfBoundaryData as stadserfBoundary } from "@/data/stadserf-bounda
 import { findDurationRestriction } from "@/lib/duration-restrictions";
 import type { GarageMarkerData } from "@/lib/garages";
 import { isRelevantGermanHoliday } from "@/lib/holidays-de";
-import type { MapPanelContext } from "@/lib/panel-context";
+import {
+  hoverReplacesContext,
+  isSameSelectedZone,
+  type HoveredMapFeature,
+  type MapPanelContext,
+} from "@/lib/panel-context";
 import { resolveParkingAtLocation } from "@/lib/parking-status";
+import { isPointInStadserf, isStadserfAccessOpen } from "@/lib/stadserf";
 import { activeZoneLabelKey, zoneCollectionKey } from "@/lib/zone-labels";
 import { locateUserInZones, type ZoneCollections } from "@/lib/zones";
 const ParkingMap = dynamic(
@@ -43,10 +49,8 @@ export function EnskeParkApp() {
     null,
   );
 
-  const [hoveredZone, setHoveredZone] = useState<{
-    kind: "paid" | "permit";
-    zoneRaw: string | null;
-  } | null>(null);
+  const [hoveredZone, setHoveredZone] = useState<HoveredMapFeature | null>(null);
+  const [hoverClearToken, setHoverClearToken] = useState(0);
   const [clock, setClock] = useState<Date | null>(null);
 
   const loadZones = useCallback(async () => {
@@ -112,6 +116,10 @@ export function EnskeParkApp() {
 
   const userZone = useStableUserZone(rawUserZone);
 
+  const userInStadserf = Boolean(
+    position && isPointInStadserf(position.lon, position.lat),
+  );
+
   const currentZoneLabelKey = useMemo(
     () => activeZoneLabelKey(userZone.kind, userZone.zoneRaw),
     [userZone.kind, userZone.zoneRaw],
@@ -136,7 +144,7 @@ export function EnskeParkApp() {
   );
 
   const panelPoint = useMemo(() => {
-    if (hoveredZone) return null;
+    if (hoverReplacesContext(hoveredZone, mapContext)) return null;
     if (mapContext?.type === "destination") {
       return { lon: mapContext.lon, lat: mapContext.lat };
     }
@@ -156,13 +164,29 @@ export function EnskeParkApp() {
   }, [panelPoint]);
 
   const needsLiveCountdown = useMemo(() => {
+    const now = clock ?? new Date();
+    const hoverPreview = hoverReplacesContext(hoveredZone, mapContext) ? hoveredZone : null;
+    const stadserfVisible =
+      mapContext?.type === "stadserf" ||
+      mapContext?.type === "stadserf-access" ||
+      hoverPreview?.kind === "stadserf" ||
+      hoverPreview?.kind === "stadserf-access" ||
+      (mapContext == null && hoverPreview == null && userInStadserf);
+    if (stadserfVisible && isStadserfAccessOpen(now)) return true;
+
     const hasCountdown = (kind: "paid" | "permit" | "outside", zoneRaw: string | null) => {
       if (kind !== "paid") return false;
       const snap = resolveParkingAtLocation(kind, zoneRaw, clock ?? undefined);
       return snap.paidStartsAt != null && !snap.isPaidNow;
     };
     if (mapContext == null && hasCountdown(userZone.kind, userZone.zoneRaw)) return true;
-    if (hoveredZone && hasCountdown(hoveredZone.kind, hoveredZone.zoneRaw)) return true;
+    if (
+      hoverPreview &&
+      (hoverPreview.kind === "paid" || hoverPreview.kind === "permit") &&
+      hasCountdown(hoverPreview.kind, hoverPreview.zoneRaw)
+    ) {
+      return true;
+    }
     if (mapContext?.type === "zone") {
       return hasCountdown(mapContext.kind, mapContext.zoneRaw);
     }
@@ -173,7 +197,7 @@ export function EnskeParkApp() {
       return hasCountdown(mapContext.kind, mapContext.zoneRaw);
     }
     return false;
-  }, [userZone.kind, userZone.zoneRaw, hoveredZone, mapContext, clock]);
+  }, [userZone.kind, userZone.zoneRaw, hoveredZone, mapContext, clock, userInStadserf]);
 
   useEffect(() => {
     const tick = () => setClock(new Date());
@@ -197,8 +221,10 @@ export function EnskeParkApp() {
 
   const clearContext = useCallback(() => {
     setMapContext(null);
+    setHoveredZone(null);
     setEstimatorOpen(false);
     setSearchOpen(false);
+    setHoverClearToken((token) => token + 1);
   }, []);
 
   const handleUserMovedMap = useCallback(() => setFollowUser(false), []);
@@ -211,6 +237,10 @@ export function EnskeParkApp() {
       lon?: number;
       lat?: number;
     }) => {
+      if (isSameSelectedZone(mapContext, payload.kind, payload.zoneRaw)) {
+        clearContext();
+        return;
+      }
       setEstimatorOpen(false);
       setMapContext({
         type: "zone",
@@ -220,7 +250,7 @@ export function EnskeParkApp() {
         lat: payload.lat,
       });
     },
-    [],
+    [clearContext, mapContext],
   );
 
   const handleGarageSelect = useCallback((garage: GarageMarkerData) => {
@@ -228,9 +258,14 @@ export function EnskeParkApp() {
     setMapContext({ type: "garage", garage });
   }, []);
 
-  const handlePnrSelect = useCallback(() => {
+  const handleStadserfSelect = useCallback(() => {
     setEstimatorOpen(false);
-    setMapContext({ type: "pnr" });
+    setMapContext({ type: "stadserf" });
+  }, []);
+
+  const handleStadserfAccessSelect = useCallback((id: string) => {
+    setEstimatorOpen(false);
+    setMapContext({ type: "stadserf-access", id });
   }, []);
 
   const handleMapBackgroundClick = useCallback(
@@ -265,12 +300,33 @@ export function EnskeParkApp() {
     [zones],
   );
 
-  const handleZoneHoverChange = useCallback(
-    (zone: { kind: "paid" | "permit"; zoneRaw: string | null } | null) => {
-      setHoveredZone(zone);
-    },
-    [],
-  );
+  const handleZoneHoverChange = useCallback((hover: HoveredMapFeature | null) => {
+    setHoveredZone(hover);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (searchOpen) {
+        setSearchOpen(false);
+        return;
+      }
+      if (mapContext == null) return;
+      event.preventDefault();
+      clearContext();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [clearContext, mapContext, searchOpen]);
 
   const handleSearchSelect = useCallback(
     (result: GeocodeResult) => {
@@ -306,7 +362,8 @@ export function EnskeParkApp() {
         onUserMovedMap={handleUserMovedMap}
         onZoneSelect={handleZoneSelect}
         onGarageSelect={handleGarageSelect}
-        onPnrSelect={handlePnrSelect}
+        onStadserfSelect={handleStadserfSelect}
+        onStadserfAccessSelect={handleStadserfAccessSelect}
         garages={garages}
         stadserfBoundary={stadserfBoundary}
         destination={destinationPin}
@@ -315,6 +372,16 @@ export function EnskeParkApp() {
         recenterToken={recenterToken}
         activeZoneLabelKey={currentZoneLabelKey}
         selectedZoneKey={selectedZoneKey}
+        hoverClearToken={hoverClearToken}
+        stadserfSelected={
+          mapContext?.type === "stadserf" || mapContext?.type === "stadserf-access"
+        }
+        stadserfCurrent={userInStadserf}
+        selectedAccessId={
+          mapContext?.type === "stadserf-access" ? mapContext.id : null
+        }
+        selectedGarageId={mapContext?.type === "garage" ? mapContext.garage.id : null}
+        selectionActive={mapContext != null && mapContext.type !== "live"}
         onZoneHoverChange={handleZoneHoverChange}
       />
 
@@ -338,7 +405,17 @@ export function EnskeParkApp() {
           germanHoliday={germanHoliday}
           busyUpgrade={busyUpgrade}
           mapContext={mapContext}
-          hoveredZone={hoveredZone}
+          hoveredZone={
+            hoveredZone?.kind === "garage"
+              ? {
+                  kind: "garage",
+                  garage:
+                    garages.find((garage) => garage.id === hoveredZone.garage.id) ??
+                    hoveredZone.garage,
+                }
+              : hoveredZone
+          }
+          userInStadserf={userInStadserf}
           durationRestriction={durationRestriction}
           estimatorOpen={estimatorOpen}
           onEstimatorOpenChange={setEstimatorOpen}

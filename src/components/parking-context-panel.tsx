@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { format } from "date-fns";
 import { X } from "lucide-react";
 import { ParkingEstimator } from "@/components/parking-estimator";
@@ -8,12 +8,31 @@ import type { DurationRestriction } from "@/lib/duration-restrictions";
 import type { LocationKind, ParkingSnapshot, StatusPanelContext } from "@/lib/parking-status";
 import {
   composePanelSecondary,
+  formatGeneralPaidHours,
   resolveParkingAtLocation,
   statusPanelColumns,
 } from "@/lib/parking-status";
-import type { MapPanelContext } from "@/lib/panel-context";
-import { PNR_ZUIDERVAL } from "@/lib/pnr-zuiderval";
-import { formatEuro } from "@/lib/tariffs";
+import {
+  hoverReplacesContext,
+  type HoveredMapFeature,
+  type MapPanelContext,
+} from "@/lib/panel-context";
+import type { GarageMarkerData } from "@/lib/garages";
+import {
+  getStadserfAccessPoint,
+  stadserfAccessDirectionLabel,
+  stadserfAccessHoverDirection,
+  type StadserfAccessPoint,
+} from "@/lib/stadserf-access";
+import {
+  isStadserfAccessOpen,
+  resolveStadserfStatus,
+  stadserfAccessHoverFact,
+  stadserfAccessWindowCopy,
+  stadserfSelectedDetails,
+} from "@/lib/stadserf";
+import { MOTION, motionMs, prefersReducedMotion } from "@/lib/motion";
+import { hoverMotionId, panelMotionKey } from "@/lib/panel-motion";
 
 type ParkingContextPanelProps = {
   snapshot: ParkingSnapshot;
@@ -29,7 +48,8 @@ type ParkingContextPanelProps = {
   germanHoliday: boolean;
   busyUpgrade: boolean;
   mapContext: MapPanelContext | null;
-  hoveredZone: { kind: "paid" | "permit"; zoneRaw: string | null } | null;
+  hoveredZone: HoveredMapFeature | null;
+  userInStadserf: boolean;
   durationRestriction: DurationRestriction | null;
   estimatorOpen: boolean;
   onEstimatorOpenChange: (open: boolean) => void;
@@ -39,19 +59,38 @@ type ParkingContextPanelProps = {
   panelLat: number | null;
 };
 
-type PanelTone = "paid" | "free" | "permit" | "neutral" | "loading";
+type PanelTone = "paid" | "free" | "permit" | "neutral" | "loading" | "stadserf";
+
+type PanelEdge = "free" | "premium" | "paid" | "permit" | "stadserf" | "garage" | "neutral";
 
 type ModuleCells = {
   left: string;
   center: string;
   right: string;
-  rightMode?: "rate" | "free" | "permit";
+  rightMode?: "rate" | "free" | "permit" | "access" | "exemption";
   secondary: string;
+  schedule?: string | null;
   accent?: string | null;
   tone?: PanelTone;
+  edge?: PanelEdge;
   loading?: boolean;
   rateTappable?: boolean;
 };
+
+function edgeForSnapshot(snapshot: ParkingSnapshot): PanelEdge {
+  if (snapshot.kind === "permit") return "permit";
+  if (snapshot.zone === "1" || snapshot.zone === "1B") return "premium";
+  if (snapshot.zone) return "paid";
+  return "free";
+}
+
+function edgeFromTone(tone: PanelTone): PanelEdge {
+  if (tone === "stadserf") return "stadserf";
+  if (tone === "permit") return "permit";
+  if (tone === "free") return "free";
+  if (tone === "paid") return "paid";
+  return "neutral";
+}
 
 function extraNotes(
   context: StatusPanelContext,
@@ -86,15 +125,26 @@ function parkingModuleCells(
       fact: columns.fact,
       extras: extraNotes(context, nearBoundary, germanHoliday, busyUpgrade),
     }),
+    schedule:
+      snapshot.kind === "paid" && snapshot.zone
+        ? formatGeneralPaidHours(snapshot.zone)
+        : null,
     accent: durationRestriction?.label ?? null,
     tone: columns.tone,
+    edge: edgeForSnapshot(snapshot),
     rateTappable: columns.rateTappable,
   };
 }
 
-function priceCellClass(mode: "rate" | "free" | "permit"): string {
-  if (mode === "rate") return "park-module-time tabular-nums";
+function priceCellClass(
+  mode: "rate" | "free" | "permit" | "access" | "exemption",
+): string {
+  if (mode === "rate") return "park-module-price tabular-nums";
   if (mode === "free") return "park-module-price park-module-price--free tabular-nums";
+  if (mode === "access") return "park-module-price park-module-price--access tabular-nums";
+  if (mode === "exemption") {
+    return "park-module-price park-module-price--exemption tabular-nums";
+  }
   return "park-module-price park-module-price--permit tabular-nums";
 }
 
@@ -104,8 +154,10 @@ function StatusModule({
   right,
   rightMode = "rate",
   secondary,
+  schedule,
   accent,
   tone = "neutral",
+  edge,
   loading = false,
   rateTappable = false,
   onClear,
@@ -118,8 +170,8 @@ function StatusModule({
 }) {
   return (
     <div
-      className="park-panel pointer-events-auto"
       data-tone={tone}
+      data-edge={edge ?? edgeFromTone(tone)}
       data-loading={loading ? "true" : undefined}
     >
       {onClear && <PanelClose onClear={onClear} />}
@@ -142,12 +194,203 @@ function StatusModule({
       </div>
       {accent && <p className="park-module-accent">{accent}</p>}
       <p className="park-module-secondary">{secondary}</p>
+      {schedule ? <p className="park-module-schedule">{schedule}</p> : null}
       {children}
     </div>
   );
 }
 
+function panelSignature(props: ParkingContextPanelProps): string {
+  const clock = props.clock ?? new Date();
+  const accessOpen = isStadserfAccessOpen(clock);
+  if (props.zonesError) {
+    return panelMotionKey({
+      error: true,
+      hover: null,
+      context: null,
+      paid: null,
+      accessOpen: null,
+      geo: "ok",
+    });
+  }
+
+  const hovered = hoverReplacesContext(props.hoveredZone, props.mapContext)
+    ? props.hoveredZone
+    : null;
+  if (hovered) {
+    const hover = hovered;
+    const zoneHover = hover.kind === "paid" || hover.kind === "permit";
+    const snap = zoneHover
+      ? resolveParkingAtLocation(hover.kind, hover.zoneRaw, clock)
+      : null;
+    const timed =
+      hover.kind === "stadserf" || hover.kind === "stadserf-access";
+    return panelMotionKey({
+      error: false,
+      hover: hoverMotionId(hover),
+      context: null,
+      paid: snap ? snap.isPaidNow : null,
+      accessOpen: timed ? accessOpen : null,
+      geo: "ok",
+    });
+  }
+
+  const context = props.mapContext;
+  if (context?.type === "info") {
+    return panelMotionKey({
+      error: false,
+      hover: null,
+      context: "info",
+      paid: null,
+      accessOpen: null,
+      geo: "ok",
+    });
+  }
+  if (context?.type === "garage") {
+    return panelMotionKey({
+      error: false,
+      hover: null,
+      context: `garage:${context.garage.id}`,
+      paid: null,
+      accessOpen: null,
+      geo: "ok",
+    });
+  }
+  if (context?.type === "stadserf" || (props.userInStadserf && context == null && !props.geoDenied && !props.geoUnavailableMessage)) {
+    return panelMotionKey({
+      error: false,
+      hover: null,
+      context: "stadserf",
+      paid: null,
+      accessOpen,
+      geo: "ok",
+    });
+  }
+  if (context?.type === "stadserf-access") {
+    return panelMotionKey({
+      error: false,
+      hover: null,
+      context: `access:${context.id}`,
+      paid: null,
+      accessOpen,
+      geo: "ok",
+    });
+  }
+  if (context?.type === "zone" || context?.type === "point" || context?.type === "destination") {
+    const snap = resolveParkingAtLocation(context.kind, context.zoneRaw, clock);
+    const id =
+      context.type === "zone"
+        ? `zone:${context.kind}:${context.zoneRaw ?? ""}`
+        : context.type === "destination"
+          ? `destination:${context.lon},${context.lat}`
+          : `point:${context.lon},${context.lat}`;
+    return panelMotionKey({
+      error: false,
+      hover: null,
+      context: id,
+      paid: snap.isPaidNow,
+      accessOpen: null,
+      geo: "ok",
+    });
+  }
+
+  if (props.geoDenied || props.geoUnavailableMessage) {
+    return panelMotionKey({
+      error: false,
+      hover: null,
+      context: null,
+      paid: null,
+      accessOpen: null,
+      geo: props.geoDenied ? "denied" : "unavailable",
+    });
+  }
+  if (props.geoPending || props.zonesLoading) {
+    return panelMotionKey({
+      error: false,
+      hover: null,
+      context: null,
+      paid: null,
+      accessOpen: null,
+      geo: "pending",
+    });
+  }
+
+  return panelMotionKey({
+    error: false,
+    hover: null,
+    context: `live:${props.snapshot.zone ?? props.locationKind}`,
+    paid: props.snapshot.isPaidNow,
+    accessOpen: null,
+    geo: "ok",
+  });
+}
+
+function PanelCrossfade({
+  signature,
+  children,
+}: {
+  signature: string;
+  children: ReactNode;
+}) {
+  const liveRef = useRef(children);
+  const [active, setActive] = useState(signature);
+  const [outgoing, setOutgoing] = useState<{ key: string; node: ReactNode } | null>(
+    null,
+  );
+  const fadeId = useRef(0);
+
+  useLayoutEffect(() => {
+    if (active === signature) return;
+    const reduced = prefersReducedMotion();
+    setOutgoing(
+      reduced ? null : { key: `${active}:${fadeId.current++}`, node: liveRef.current },
+    );
+    setActive(signature);
+  }, [active, signature]);
+
+  useEffect(() => {
+    liveRef.current = children;
+  }, [children]);
+
+  useEffect(() => {
+    if (!outgoing) return;
+    const timer = window.setTimeout(() => setOutgoing(null), motionMs(MOTION.panelIn));
+    return () => window.clearTimeout(timer);
+  }, [outgoing]);
+
+  return (
+    <div className="park-panel-content">
+      {outgoing ? (
+        <div className="park-panel-layer is-out" key={outgoing.key}>
+          {outgoing.node}
+        </div>
+      ) : null}
+      <div className={outgoing ? "park-panel-layer is-in" : "park-panel-layer"}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function PanelExpand({ open, children }: { open: boolean; children: ReactNode }) {
+  return (
+    <div className={open ? "park-expand is-open" : "park-expand"} inert={open ? undefined : true}>
+      <div className="park-expand-clip">{children}</div>
+    </div>
+  );
+}
+
 export function ParkingContextPanel(props: ParkingContextPanelProps) {
+  return (
+    <div className="park-panel pointer-events-auto">
+      <PanelCrossfade signature={panelSignature(props)}>
+        <PanelContents {...props} />
+      </PanelCrossfade>
+    </div>
+  );
+}
+
+function PanelContents(props: ParkingContextPanelProps) {
   const {
     snapshot,
     nearBoundary,
@@ -161,6 +404,7 @@ export function ParkingContextPanel(props: ParkingContextPanelProps) {
     busyUpgrade,
     mapContext,
     hoveredZone,
+    userInStadserf,
     durationRestriction,
     estimatorOpen,
     onEstimatorOpenChange,
@@ -182,7 +426,23 @@ export function ParkingContextPanel(props: ParkingContextPanelProps) {
     );
   }
 
-  if (hoveredZone && mapContext == null) {
+  if (hoverReplacesContext(hoveredZone, mapContext)) {
+    if (hoveredZone.kind === "garage") {
+      return <GarageHoverModule garage={hoveredZone.garage} />;
+    }
+    if (hoveredZone.kind === "stadserf-access") {
+      const access = getStadserfAccessPoint(hoveredZone.id);
+      if (access) return <AccessHoverModule access={access} clock={clock} />;
+      return <StadserfModule clock={clock} />;
+    }
+    if (hoveredZone.kind === "stadserf") {
+      return <StadserfModule clock={clock} />;
+    }
+    if (hoveredZone.kind === "outside") {
+      const snap = resolveParkingAtLocation("outside", null, clock);
+      const cells = parkingModuleCells(snap, clock, "hover", false, germanHoliday, busyUpgrade, null);
+      return <StatusModule {...cells} />;
+    }
     const snap = resolveParkingAtLocation(hoveredZone.kind, hoveredZone.zoneRaw, clock);
     const cells = parkingModuleCells(
       snap,
@@ -198,7 +458,7 @@ export function ParkingContextPanel(props: ParkingContextPanelProps) {
 
   if (mapContext?.type === "info") {
     return (
-      <div className="park-panel pointer-events-auto" data-tone="neutral">
+      <div data-tone="neutral">
         <PanelClose onClear={onClearContext} />
         <p className="park-info-title">ENSKE PARK</p>
         <p className="park-info-body">
@@ -230,29 +490,9 @@ export function ParkingContextPanel(props: ParkingContextPanelProps) {
         center={center}
         right={right}
         secondary={secondary}
+        edge="garage"
         onClear={onClearContext}
       />
-    );
-  }
-
-  if (mapContext?.type === "pnr") {
-    return (
-      <StatusModule
-        left="24/7"
-        center="P+R ZUIDERVAL"
-        right={`€ ${formatEuro(PNR_ZUIDERVAL.dailyEur)}/d`}
-        secondary={PNR_ZUIDERVAL.transitNote}
-        onClear={onClearContext}
-      >
-        <a
-          className="park-panel-action mt-2 inline-block"
-          href={PNR_ZUIDERVAL.routeUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Route
-        </a>
-      </StatusModule>
     );
   }
 
@@ -275,15 +515,17 @@ export function ParkingContextPanel(props: ParkingContextPanelProps) {
           cells.rateTappable ? () => onEstimatorOpenChange(true) : undefined
         }
       >
-        {estimatorOpen && snap.zone && clock && (
-          <ParkingEstimator
-            zone={snap.zone}
-            lon={panelLon}
-            lat={panelLat}
-            clock={clock}
-            onClose={() => onEstimatorOpenChange(false)}
-          />
-        )}
+        {snap.zone && clock ? (
+          <PanelExpand open={estimatorOpen}>
+            <ParkingEstimator
+              zone={snap.zone}
+              lon={panelLon}
+              lat={panelLat}
+              clock={clock}
+              onClose={() => onEstimatorOpenChange(false)}
+            />
+          </PanelExpand>
+        ) : null}
       </StatusModule>
     );
   }
@@ -308,16 +550,41 @@ export function ParkingContextPanel(props: ParkingContextPanelProps) {
           cells.rateTappable ? () => onEstimatorOpenChange(true) : undefined
         }
       >
-        {estimatorOpen && snap.zone && clock && (
-          <ParkingEstimator
-            zone={snap.zone}
-            lon={panelLon}
-            lat={panelLat}
-            clock={clock}
-            onClose={() => onEstimatorOpenChange(false)}
-          />
-        )}
+        {snap.zone && clock ? (
+          <PanelExpand open={estimatorOpen}>
+            <ParkingEstimator
+              zone={snap.zone}
+              lon={panelLon}
+              lat={panelLat}
+              clock={clock}
+              onClose={() => onEstimatorOpenChange(false)}
+            />
+          </PanelExpand>
+        ) : null}
       </StatusModule>
+    );
+  }
+
+  if (mapContext?.type === "stadserf") {
+    return (
+      <StadserfModule clock={clock} onClear={onClearContext} showDetails />
+    );
+  }
+
+  if (mapContext?.type === "stadserf-access") {
+    const access = getStadserfAccessPoint(mapContext.id);
+    if (!access) {
+      return (
+        <StadserfModule clock={clock} onClear={onClearContext} showDetails />
+      );
+    }
+    return (
+      <StadserfAccessModule
+        name={access.name}
+        direction={access.direction}
+        clock={clock}
+        onClear={onClearContext}
+      />
     );
   }
 
@@ -340,17 +607,23 @@ export function ParkingContextPanel(props: ParkingContextPanelProps) {
           cells.rateTappable ? () => onEstimatorOpenChange(true) : undefined
         }
       >
-        {estimatorOpen && snap.zone && clock && (
-          <ParkingEstimator
-            zone={snap.zone}
-            lon={panelLon}
-            lat={panelLat}
-            clock={clock}
-            onClose={() => onEstimatorOpenChange(false)}
-          />
-        )}
+        {snap.zone && clock ? (
+          <PanelExpand open={estimatorOpen}>
+            <ParkingEstimator
+              zone={snap.zone}
+              lon={panelLon}
+              lat={panelLat}
+              clock={clock}
+              onClose={() => onEstimatorOpenChange(false)}
+            />
+          </PanelExpand>
+        ) : null}
       </StatusModule>
     );
+  }
+
+  if (userInStadserf && !geoDenied && !geoUnavailableMessage) {
+    return <StadserfModule clock={clock} />;
   }
 
   if (geoDenied || geoUnavailableMessage) {
@@ -400,14 +673,131 @@ export function ParkingContextPanel(props: ParkingContextPanelProps) {
       {...cells}
       onRateClick={cells.rateTappable ? () => onEstimatorOpenChange(true) : undefined}
     >
-      {estimatorOpen && snapshot.zone && clock && (
-        <ParkingEstimator
-          zone={snapshot.zone}
-          lon={panelLon}
-          lat={panelLat}
-          clock={clock}
-          onClose={() => onEstimatorOpenChange(false)}
-        />
+      {snapshot.zone && clock ? (
+        <PanelExpand open={estimatorOpen}>
+          <ParkingEstimator
+            zone={snapshot.zone}
+            lon={panelLon}
+            lat={panelLat}
+            clock={clock}
+            onClose={() => onEstimatorOpenChange(false)}
+          />
+        </PanelExpand>
+      ) : null}
+    </StatusModule>
+  );
+}
+
+function GarageHoverModule({ garage }: { garage: GarageMarkerData }) {
+  const updated =
+    garage.live && garage.lastUpdated
+      ? format(new Date(garage.lastUpdated), "HH:mm")
+      : null;
+  const vacant =
+    garage.live && garage.vacant != null
+      ? `${garage.vacant.toLocaleString("nl-NL")} VRIJ`
+      : "—";
+  return (
+    <StatusModule
+      left="GARAGE"
+      center={garage.shortLabel.toUpperCase()}
+      right={vacant}
+      secondary={
+        updated ? `Live bezetting · bijgewerkt ${updated}` : "Garage · bezetting onbekend"
+      }
+      tone="neutral"
+      edge="garage"
+    />
+  );
+}
+
+function AccessHoverModule({
+  access,
+  clock,
+}: {
+  access: StadserfAccessPoint;
+  clock?: Date;
+}) {
+  return (
+    <StatusModule
+      left="TOEGANG"
+      center={access.name.toUpperCase()}
+      right={stadserfAccessHoverDirection(access.direction)}
+      rightMode="access"
+      secondary={stadserfAccessHoverFact(clock ?? new Date())}
+      tone="stadserf"
+    />
+  );
+}
+
+function StadserfAccessModule({
+  name,
+  direction,
+  clock,
+  onClear,
+}: {
+  name: string;
+  direction: "entry" | "exit" | "both";
+  clock?: Date;
+  onClear: () => void;
+}) {
+  const windowCopy = stadserfAccessWindowCopy(clock ?? new Date());
+  return (
+    <div data-tone="stadserf" data-edge="stadserf">
+      <PanelClose onClear={onClear} />
+      <div className="park-stadserf-access">
+        <p className="park-stadserf-access-kicker">TOEGANG STADSERF</p>
+        <p className="park-stadserf-access-name">{name}</p>
+        <p className="park-stadserf-access-dir">
+          {stadserfAccessDirectionLabel(direction)}
+        </p>
+        <div className="park-stadserf-access-status">
+          <p className="park-stadserf-access-status-title">{windowCopy.title}</p>
+          <p className="park-stadserf-access-status-detail">{windowCopy.detail}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StadserfModule({
+  clock,
+  onClear,
+  showDetails = false,
+}: {
+  clock?: Date;
+  onClear?: () => void;
+  showDetails?: boolean;
+}) {
+  const status = resolveStadserfStatus(clock ?? new Date());
+  const details = showDetails ? stadserfSelectedDetails() : null;
+  return (
+    <StatusModule
+      left={status.left}
+      center={status.center}
+      right={status.right}
+      rightMode={status.rightMode}
+      secondary={status.fact}
+      tone={status.tone}
+      onClear={onClear}
+    >
+      {details && (
+        <div className="park-stadserf-details">
+          <p className="park-stadserf-title">{details.title}</p>
+          <ul className="park-stadserf-list">
+            {details.lines.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          <a
+            className="park-stadserf-link"
+            href={details.actionUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {details.actionLabel}
+          </a>
+        </div>
       )}
     </StatusModule>
   );

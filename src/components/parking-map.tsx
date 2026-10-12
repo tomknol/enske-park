@@ -10,11 +10,12 @@ import {
   type MapTouchEvent,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { FeatureCollection } from "geojson";
 import {
   buildZoneLabelPoints,
   parseZoneCollectionKey,
+  zoneCollectionKey,
   ZONE_LABEL_FONT,
 } from "@/lib/zone-labels";
 import type { ZoneCollections } from "@/lib/zones";
@@ -27,22 +28,44 @@ import {
   ZONE_FILL_OPACITY,
   ZONE_LINE_OPACITY,
   ZONE_LINE_WIDTH,
-  ZONE_HOVER_TRANSITION,
-  ZONE_PAINT_TRANSITION,
   type ZoneSourceId,
   type ZoneStateTarget,
 } from "@/lib/zone-map-highlight";
 import type { GarageMarkerData } from "@/lib/garages";
+import { resolveMapActivation } from "@/lib/map-activation";
+import { mapPaintTransition, MOTION } from "@/lib/motion";
 import {
   clearUserLocationData,
   ensureMapOverlayLayers,
+  GARAGES_FILL_LAYER,
+  GARAGES_HIT_LAYER,
+  GARAGES_SOURCE,
   OVERLAY_HIT_LAYERS,
   setDestinationOverlayData,
   setGarageOverlayData,
-  setPnrOverlayData,
   setUserLocationData,
   whenStyleReady,
 } from "@/lib/map-overlays";
+import type { HoveredMapFeature } from "@/lib/panel-context";
+import {
+  STADSERF_ACCESS_FILL_LAYER,
+  STADSERF_ACCESS_HIT_LAYER,
+  STADSERF_ACCESS_SOURCE,
+  stadserfAccessPoints,
+} from "@/lib/stadserf-access";
+import {
+  STADSERF_FILL_COLOR,
+  STADSERF_FILL_OPACITY,
+  STADSERF_LINE_COLOR,
+  STADSERF_LINE_OPACITY,
+  STADSERF_LINE_WIDTH,
+} from "@/lib/stadserf-paint";
+import {
+  STADSERF_FEATURE_ID,
+  STADSERF_FILL_LAYER,
+  STADSERF_LINE_LAYER,
+  STADSERF_SOURCE,
+} from "@/lib/stadserf";
 import { MAP_STYLE_URL } from "@/lib/map-theme";
 import type { GeoPosition } from "@/hooks/use-geolocation";
 
@@ -61,7 +84,8 @@ type ParkingMapProps = {
     lat?: number;
   }) => void;
   onGarageSelect: (garage: GarageMarkerData) => void;
-  onPnrSelect: () => void;
+  onStadserfSelect: () => void;
+  onStadserfAccessSelect: (id: string) => void;
   garages: GarageMarkerData[];
   stadserfBoundary: FeatureCollection | null;
   destination: { lon: number; lat: number } | null;
@@ -70,12 +94,35 @@ type ParkingMapProps = {
   recenterToken: number;
   activeZoneLabelKey: string | null;
   selectedZoneKey: string | null;
-  onZoneHoverChange?: (
-    zone: { kind: "paid" | "permit"; zoneRaw: string | null } | null,
-  ) => void;
+  hoverClearToken?: number;
+  stadserfSelected?: boolean;
+  stadserfCurrent?: boolean;
+  selectedAccessId?: string | null;
+  selectedGarageId?: string | null;
+  /** While an object is selected, hover does not change the panel or the map emphasis. */
+  selectionActive?: boolean;
+  onZoneHoverChange?: (hover: HoveredMapFeature | null) => void;
 };
 
 const ZONE_CLICK_LAYERS = ["paid-zones-fill", "permit-zones-fill"] as const;
+/** Hold a zone hover across a one-frame gap between adjacent polygons. */
+const ZONE_HOVER_LEAVE_MS = 40;
+
+function applyStadserfPaint(map: MaplibreMap) {
+  const motion = mapPaintTransition(MOTION.normal);
+  if (map.getLayer(STADSERF_FILL_LAYER)) {
+    map.setPaintProperty(STADSERF_FILL_LAYER, "fill-color", STADSERF_FILL_COLOR);
+    map.setPaintProperty(STADSERF_FILL_LAYER, "fill-opacity", STADSERF_FILL_OPACITY);
+    map.setPaintProperty(STADSERF_FILL_LAYER, "fill-opacity-transition", motion);
+  }
+  if (!map.getLayer(STADSERF_LINE_LAYER)) return;
+  map.setPaintProperty(STADSERF_LINE_LAYER, "line-color", STADSERF_LINE_COLOR);
+  map.setPaintProperty(STADSERF_LINE_LAYER, "line-opacity", STADSERF_LINE_OPACITY);
+  map.setPaintProperty(STADSERF_LINE_LAYER, "line-width", STADSERF_LINE_WIDTH);
+  map.setPaintProperty(STADSERF_LINE_LAYER, "line-color-transition", motion);
+  map.setPaintProperty(STADSERF_LINE_LAYER, "line-opacity-transition", motion);
+  map.setPaintProperty(STADSERF_LINE_LAYER, "line-width-transition", motion);
+}
 
 const DESKTOP_ZONE_HOVER =
   typeof window !== "undefined" &&
@@ -194,7 +241,9 @@ const PAID_ZONE_LABEL_OPACITY: ExpressionSpecification = [
   ["boolean", ["get", "labelHover"], false],
   0.8,
   ["boolean", ["get", "labelSelected"], false],
-  0.78,
+  0.86,
+  ["==", ["get", "centre"], true],
+  0.54,
   0.62,
 ];
 
@@ -210,6 +259,8 @@ const PAID_ZONE_LABEL_HALO_WIDTH: ExpressionSpecification = [
   2.8,
   ["boolean", ["get", "labelHover"], false],
   2.45,
+  ["==", ["get", "centre"], true],
+  1.6,
   2,
 ];
 
@@ -236,6 +287,7 @@ function stylePaidZoneLabels(map: MaplibreMap) {
   ]);
   map.setPaintProperty(id, "text-halo-width", PAID_ZONE_LABEL_HALO_WIDTH);
   map.setPaintProperty(id, "text-opacity", PAID_ZONE_LABEL_OPACITY);
+  map.setPaintProperty(id, "text-opacity-transition", mapPaintTransition());
 }
 
 function stylePermitZoneLabels(map: MaplibreMap) {
@@ -327,15 +379,22 @@ function removeLegacyHighlightLayers(map: MaplibreMap, sourceId: ZoneSourceId) {
   }
 }
 
+const ZONE_LINE_COLOR: ExpressionSpecification = [
+  "case",
+  ["boolean", ["feature-state", "selected"], false],
+  ["get", "lineActive"],
+  ["get", "line"],
+];
+
 function ensureZoneHighlightLayers(map: MaplibreMap, sourceId: ZoneSourceId) {
   const lineId = `${sourceId}-line`;
   const currentEdgeId = `${sourceId}-current-edge`;
   const selectedEdgeId = `${sourceId}-selected-edge`;
+  const motion = mapPaintTransition();
 
   removeLegacyHighlightLayers(map, sourceId);
-  for (const id of [currentEdgeId, selectedEdgeId]) {
-    if (map.getLayer(id)) map.removeLayer(id);
-  }
+  if (map.getLayer(selectedEdgeId)) map.removeLayer(selectedEdgeId);
+  if (map.getLayer(currentEdgeId)) map.removeLayer(currentEdgeId);
   if (!map.getSource(sourceId)) return;
 
   map.addLayer(
@@ -345,40 +404,20 @@ function ensureZoneHighlightLayers(map: MaplibreMap, sourceId: ZoneSourceId) {
       source: sourceId,
       paint: {
         "line-color": ["get", "line"],
-        "line-width": sourceId === "permit-zones" ? 4 : 4.5,
-        "line-opacity": [
-          "case",
-          ["boolean", ["feature-state", "current"], false],
-          sourceId === "permit-zones" ? 0.08 : 0.1,
-          0,
-        ],
-        "line-blur": 1,
-        "line-width-transition": ZONE_PAINT_TRANSITION,
-        "line-opacity-transition": ZONE_PAINT_TRANSITION,
-      },
-    },
-    lineId,
-  );
-
-  map.addLayer(
-    {
-      id: selectedEdgeId,
-      type: "line",
-      source: sourceId,
-      paint: {
-        "line-color": "rgba(198, 208, 222, 0.65)",
-        "line-width": 1.5,
+        "line-width": sourceId === "permit-zones" ? 3.2 : 3.6,
         "line-opacity": [
           "case",
           [
             "all",
-            ["boolean", ["feature-state", "selected"], false],
-            ["!", ["boolean", ["feature-state", "current"], false]],
+            ["boolean", ["feature-state", "current"], false],
+            ["!", ["boolean", ["feature-state", "selected"], false]],
           ],
-          0.45,
+          sourceId === "permit-zones" ? 0.08 : 0.1,
           0,
         ],
-        "line-dasharray": [2, 2.5],
+        "line-blur": 0.6,
+        "line-width-transition": motion,
+        "line-opacity-transition": motion,
       },
     },
     lineId,
@@ -389,15 +428,17 @@ function applyZoneLayerPaint(map: MaplibreMap, sourceId: ZoneSourceId) {
   const fillId = `${sourceId}-fill`;
   const lineId = `${sourceId}-line`;
   const isPermit = sourceId === "permit-zones";
+  const motion = mapPaintTransition();
   if (map.getLayer(fillId)) {
     map.setPaintProperty(
       fillId,
       "fill-opacity",
       isPermit ? PERMIT_FILL_OPACITY : ZONE_FILL_OPACITY,
     );
-    map.setPaintProperty(fillId, "fill-opacity-transition", ZONE_HOVER_TRANSITION);
+    map.setPaintProperty(fillId, "fill-opacity-transition", motion);
   }
   if (map.getLayer(lineId)) {
+    map.setPaintProperty(lineId, "line-color", ZONE_LINE_COLOR);
     map.setPaintProperty(
       lineId,
       "line-width",
@@ -408,8 +449,9 @@ function applyZoneLayerPaint(map: MaplibreMap, sourceId: ZoneSourceId) {
       "line-opacity",
       isPermit ? PERMIT_LINE_OPACITY : ZONE_LINE_OPACITY,
     );
-    map.setPaintProperty(lineId, "line-width-transition", ZONE_HOVER_TRANSITION);
-    map.setPaintProperty(lineId, "line-opacity-transition", ZONE_HOVER_TRANSITION);
+    map.setPaintProperty(lineId, "line-color-transition", motion);
+    map.setPaintProperty(lineId, "line-width-transition", motion);
+    map.setPaintProperty(lineId, "line-opacity-transition", motion);
   }
   ensureZoneHighlightLayers(map, sourceId);
 }
@@ -471,7 +513,8 @@ export function ParkingMap({
   onUserMovedMap,
   onZoneSelect,
   onGarageSelect,
-  onPnrSelect,
+  onStadserfSelect,
+  onStadserfAccessSelect,
   garages,
   stadserfBoundary,
   destination,
@@ -480,6 +523,12 @@ export function ParkingMap({
   recenterToken,
   activeZoneLabelKey,
   selectedZoneKey,
+  hoverClearToken = 0,
+  stadserfSelected = false,
+  stadserfCurrent = false,
+  selectedAccessId = null,
+  selectedGarageId = null,
+  selectionActive = false,
   onZoneHoverChange,
 }: ParkingMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -490,14 +539,23 @@ export function ParkingMap({
   const onUserMovedMapRef = useRef(onUserMovedMap);
   const onZoneSelectRef = useRef(onZoneSelect);
   const onGarageSelectRef = useRef(onGarageSelect);
-  const onPnrSelectRef = useRef(onPnrSelect);
+  const onStadserfSelectRef = useRef(onStadserfSelect);
+  const onStadserfAccessSelectRef = useRef(onStadserfAccessSelect);
   const onMapBackgroundClickRef = useRef(onMapBackgroundClick);
+  const stadserfSelectedRef = useRef(stadserfSelected);
+  const stadserfCurrentRef = useRef(stadserfCurrent);
+  const stadserfHoverRef = useRef(false);
+  const hoveredAccessIdRef = useRef<string | null>(null);
+  const hoveredOverlayRef = useRef<{ source: string; id: string } | null>(null);
   const garageByIdRef = useRef<Map<string, GarageMarkerData>>(new Map());
   const onZoneHoverChangeRef = useRef(onZoneHoverChange);
   const activeZoneLabelKeyRef = useRef(activeZoneLabelKey);
   const selectedZoneKeyRef = useRef(selectedZoneKey);
   const zoneStateTargetsRef = useRef<ZoneStateTarget[]>([]);
   const hoveredZoneKeyRef = useRef<string | null>(null);
+  const zoneLeaveTimerRef = useRef(0);
+  const selectionActiveRef = useRef(selectionActive);
+  const outsideHoverRef = useRef(false);
   const labelBaseRef = useRef<FeatureCollection | null>(null);
   const zoneHoverHandlersBound = useRef(false);
   const activateMapPointRef = useRef<
@@ -511,20 +569,28 @@ export function ParkingMap({
     onUserMovedMapRef.current = onUserMovedMap;
     onZoneSelectRef.current = onZoneSelect;
     onGarageSelectRef.current = onGarageSelect;
-    onPnrSelectRef.current = onPnrSelect;
+    onStadserfSelectRef.current = onStadserfSelect;
+    onStadserfAccessSelectRef.current = onStadserfAccessSelect;
     onMapBackgroundClickRef.current = onMapBackgroundClick;
     onZoneHoverChangeRef.current = onZoneHoverChange;
+    selectionActiveRef.current = selectionActive;
     activeZoneLabelKeyRef.current = activeZoneLabelKey;
     selectedZoneKeyRef.current = selectedZoneKey;
+    stadserfSelectedRef.current = stadserfSelected;
+    stadserfCurrentRef.current = stadserfCurrent;
   }, [
     onUserMovedMap,
     onZoneSelect,
     onGarageSelect,
-    onPnrSelect,
+    onStadserfSelect,
+    onStadserfAccessSelect,
     onMapBackgroundClick,
     onZoneHoverChange,
+    selectionActive,
     activeZoneLabelKey,
     selectedZoneKey,
+    stadserfSelected,
+    stadserfCurrent,
   ]);
 
   const syncAllZoneVisualState = (map: MaplibreMap) => {
@@ -544,26 +610,89 @@ export function ParkingMap({
     );
   };
 
+  const notifyFeatureHover = (hover: HoveredMapFeature | null) => {
+    onZoneHoverChangeRef.current?.(hover);
+  };
+
   const notifyZoneHover = (zoneKey: string | null) => {
-    const cb = onZoneHoverChangeRef.current;
-    if (!cb) return;
     if (!zoneKey) {
-      cb(null);
+      notifyFeatureHover(null);
       return;
     }
     const parsed = parseZoneCollectionKey(zoneKey);
     if (!parsed) {
-      cb(null);
+      notifyFeatureHover(null);
       return;
     }
-    cb({ kind: parsed.kind, zoneRaw: parsed.zoneRaw });
+    notifyFeatureHover({ kind: parsed.kind, zoneRaw: parsed.zoneRaw });
   };
 
-  const setHoveredZoneKey = (map: MaplibreMap, zoneKey: string | null) => {
+  const setHoveredZoneKey = (
+    map: MaplibreMap,
+    zoneKey: string | null,
+    notify = true,
+  ) => {
     if (hoveredZoneKeyRef.current === zoneKey) return;
     hoveredZoneKeyRef.current = zoneKey;
     syncAllZoneVisualState(map);
-    notifyZoneHover(zoneKey);
+    if (notify) notifyZoneHover(zoneKey);
+  };
+
+  const setStadserfFeatureState = (
+    map: MaplibreMap,
+    state: { hover?: boolean; selected?: boolean; current?: boolean },
+  ) => {
+    if (!map.getSource(STADSERF_SOURCE)) return;
+    map.setFeatureState({ source: STADSERF_SOURCE, id: STADSERF_FEATURE_ID }, state);
+  };
+
+  const syncStadserfHover = (map: MaplibreMap) => {
+    setStadserfFeatureState(map, {
+      hover: stadserfHoverRef.current || hoveredAccessIdRef.current != null,
+    });
+  };
+
+  const setAccessFeatureState = (
+    map: MaplibreMap,
+    id: string | null,
+    state: "hover" | "selected",
+    value: boolean,
+  ) => {
+    if (!id || !map.getSource(STADSERF_ACCESS_SOURCE)) return;
+    map.setFeatureState({ source: STADSERF_ACCESS_SOURCE, id }, { [state]: value });
+  };
+
+  const setOverlayHover = (map: MaplibreMap, source: string | null, id: string | null) => {
+    const previous = hoveredOverlayRef.current;
+    if (previous && (previous.source !== source || previous.id !== id)) {
+      if (map.getSource(previous.source)) {
+        map.setFeatureState(
+          { source: previous.source, id: previous.id },
+          { hover: false },
+        );
+      }
+    }
+    if (!source || !id || !map.getSource(source)) {
+      hoveredOverlayRef.current = null;
+      return;
+    }
+    if (previous?.source === source && previous.id === id) return;
+    map.setFeatureState({ source, id }, { hover: true });
+    hoveredOverlayRef.current = { source, id };
+  };
+
+  const setAccessHover = (map: MaplibreMap, id: string | null) => {
+    if (hoveredAccessIdRef.current === id) return;
+    setAccessFeatureState(map, hoveredAccessIdRef.current, "hover", false);
+    hoveredAccessIdRef.current = id;
+    setAccessFeatureState(map, id, "hover", true);
+    syncStadserfHover(map);
+  };
+
+  const setStadserfHover = (map: MaplibreMap, hovered: boolean) => {
+    if (stadserfHoverRef.current === hovered) return;
+    stadserfHoverRef.current = hovered;
+    syncStadserfHover(map);
   };
 
   const activateMapPoint = (
@@ -573,44 +702,96 @@ export function ParkingMap({
   ) => {
     const overlayLayers = OVERLAY_HIT_LAYERS.filter((id) => map.getLayer(id));
     const screenPoint: [number, number] = [point.x, point.y];
+    let overlay:
+      | { kind: "garage"; id?: string }
+      | { kind: "stadserf-access"; id: string }
+      | null = null;
     if (overlayLayers.length > 0) {
       const overlayHit = map.queryRenderedFeatures(screenPoint, {
         layers: [...overlayLayers],
       })[0];
-      if (overlayHit) {
-        const kind = overlayHit.properties?.kind as string | undefined;
-        if (kind === "garage") {
-          const id = overlayHit.properties?.id as string | undefined;
-          const garage = id ? garageByIdRef.current.get(id) : undefined;
-          if (garage) onGarageSelectRef.current(garage);
-          return;
-        }
-        if (kind === "pnr") {
-          onPnrSelectRef.current();
-          return;
-        }
+      const kind = overlayHit?.properties?.kind as string | undefined;
+      if (kind === "garage") {
+        overlay = {
+          kind: "garage",
+          id: overlayHit?.properties?.id as string | undefined,
+        };
       }
     }
+    if (!overlay && map.getLayer(STADSERF_ACCESS_HIT_LAYER)) {
+      const accessHit = map.queryRenderedFeatures(screenPoint, {
+        layers: [STADSERF_ACCESS_HIT_LAYER],
+      })[0];
+      const accessId = accessHit?.properties?.id as string | undefined;
+      if (accessId) overlay = { kind: "stadserf-access", id: accessId };
+    }
 
+    const stadserfHit =
+      map.getLayer(STADSERF_FILL_LAYER) != null &&
+      map.queryRenderedFeatures(screenPoint, {
+        layers: [STADSERF_FILL_LAYER],
+      }).length > 0;
+
+    let zone: {
+      layerId: string;
+      zoneRaw: string | null;
+      gebiedCod: string | null;
+    } | null = null;
     const zoneLayers = ZONE_CLICK_LAYERS.filter((id) => map.getLayer(id));
     if (zoneLayers.length > 0) {
       const zoneHit = map.queryRenderedFeatures(screenPoint, {
         layers: [...zoneLayers],
       })[0];
       if (zoneHit) {
-        const layerId = zoneHit.layer?.id ?? "";
-        onZoneSelectRef.current({
-          kind: layerId.startsWith("permit") ? "permit" : "paid",
+        zone = {
+          layerId: zoneHit.layer?.id ?? "",
           zoneRaw: (zoneHit.properties?.ZONE as string) ?? null,
           gebiedCod: (zoneHit.properties?.GEBIED_COD as string) ?? null,
-          lon: lngLat.lng,
-          lat: lngLat.lat,
-        });
-        return;
+        };
       }
     }
 
+    const activation = resolveMapActivation(overlay, stadserfHit, zone);
+    if (activation.type === "garage") {
+      const garage = activation.id
+        ? garageByIdRef.current.get(activation.id)
+        : undefined;
+      if (garage) onGarageSelectRef.current(garage);
+      return;
+    }
+    if (activation.type === "stadserf-access") {
+      setHoveredZoneKey(map, null);
+      setAccessHover(map, null);
+      setStadserfHover(map, false);
+      onStadserfAccessSelectRef.current(activation.id);
+      return;
+    }
+    if (activation.type === "stadserf") {
+      setHoveredZoneKey(map, null);
+      setStadserfHover(map, false);
+      onStadserfSelectRef.current();
+      return;
+    }
+    if (activation.type === "zone") {
+      const kind = activation.layerId.startsWith("permit") ? "permit" : "paid";
+      const key = zoneCollectionKey(kind, activation.zoneRaw);
+      if (selectedZoneKeyRef.current === key) {
+        window.clearTimeout(zoneLeaveTimerRef.current);
+        zoneLeaveTimerRef.current = 0;
+        setHoveredZoneKey(map, null);
+      }
+      onZoneSelectRef.current({
+        kind,
+        zoneRaw: activation.zoneRaw,
+        gebiedCod: activation.gebiedCod,
+        lon: lngLat.lng,
+        lat: lngLat.lat,
+      });
+      return;
+    }
+
     setHoveredZoneKey(map, null);
+    setStadserfHover(map, false);
     onMapBackgroundClickRef.current({
       lon: lngLat.lng,
       lat: lngLat.lat,
@@ -620,6 +801,40 @@ export function ParkingMap({
   useEffect(() => {
     activateMapPointRef.current = activateMapPoint;
   });
+
+  useLayoutEffect(() => {
+    if (hoverClearToken === 0) return;
+    const map = mapRef.current;
+    if (!map) return;
+    window.clearTimeout(zoneLeaveTimerRef.current);
+    zoneLeaveTimerRef.current = 0;
+    setHoveredZoneKey(map, null);
+    setAccessHover(map, null);
+    setOverlayHover(map, null, null);
+    setStadserfHover(map, false);
+    const canvas = map.getCanvas?.();
+    if (canvas) canvas.style.cursor = "";
+    // These helpers are recreated every render and only read refs. Re-running
+    // when they change would clear a hover on every paint after a dismiss.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hoverClearToken]);
+
+  useLayoutEffect(() => {
+    selectionActiveRef.current = selectionActive;
+    if (!selectionActive) return;
+    const map = mapRef.current;
+    if (!map) return;
+    window.clearTimeout(zoneLeaveTimerRef.current);
+    zoneLeaveTimerRef.current = 0;
+    outsideHoverRef.current = false;
+    setHoveredZoneKey(map, null, false);
+    setAccessHover(map, null);
+    setOverlayHover(map, null, null);
+    setStadserfHover(map, false);
+    notifyFeatureHover(null);
+    // Helpers only read refs. Depending on them would re-clear hover every paint.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionActive]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -693,7 +908,6 @@ export function ParkingMap({
       applyFlatMapStyle(map);
       applyParkingFocusBasemap(map);
       ensureMapOverlayLayers(map);
-      setPnrOverlayData(map);
       map.resize();
     };
     const stopStyleReady = whenStyleReady(map, onStyleReady);
@@ -703,7 +917,13 @@ export function ParkingMap({
 
     map.on("dragstart", () => {
       onUserMovedMapRef.current();
+      window.clearTimeout(zoneLeaveTimerRef.current);
+      zoneLeaveTimerRef.current = 0;
       setHoveredZoneKey(map, null);
+      setAccessHover(map, null);
+      setOverlayHover(map, null, null);
+      setStadserfHover(map, false);
+      notifyFeatureHover(null);
     });
 
     mapRef.current = map;
@@ -719,6 +939,7 @@ export function ParkingMap({
       mapRef.current = null;
       zoneHoverHandlersBound.current = false;
       hoveredZoneKeyRef.current = null;
+      hoveredAccessIdRef.current = null;
       hasCenteredOnUser.current = false;
       zonesAppliedRef.current = null;
     };
@@ -787,40 +1008,170 @@ export function ParkingMap({
       if (!zoneHoverHandlersBound.current && DESKTOP_ZONE_HOVER) {
         zoneHoverHandlersBound.current = true;
 
-        const onZonePointerMove = (e: MapMouseEvent) => {
-          const overlayLayers = OVERLAY_HIT_LAYERS.filter((id) => map.getLayer(id));
-          const overlayHit =
-            overlayLayers.length > 0
-              ? map.queryRenderedFeatures(e.point, {
-                  layers: [...overlayLayers],
-                })[0]
-              : undefined;
-          if (overlayHit) {
-            map.getCanvas().style.cursor = "pointer";
-            setHoveredZoneKey(map, null);
+        const cancelZoneLeave = () => {
+          window.clearTimeout(zoneLeaveTimerRef.current);
+          zoneLeaveTimerRef.current = 0;
+        };
+        const featureHoverActive = () =>
+          hoveredZoneKeyRef.current != null ||
+          hoveredAccessIdRef.current != null ||
+          hoveredOverlayRef.current != null ||
+          stadserfHoverRef.current;
+
+        const clearFeatureHover = () => {
+          setHoveredZoneKey(map, null, false);
+          setAccessHover(map, null);
+          setOverlayHover(map, null, null);
+          setStadserfHover(map, false);
+        };
+
+        const showOutsideHover = () => {
+          if (selectionActiveRef.current) return;
+          if (outsideHoverRef.current && !featureHoverActive()) return;
+          clearFeatureHover();
+          outsideHoverRef.current = true;
+          notifyFeatureHover({ kind: "outside" });
+        };
+
+        const scheduleOutsideHover = () => {
+          if (zoneLeaveTimerRef.current) return;
+          zoneLeaveTimerRef.current = window.setTimeout(() => {
+            zoneLeaveTimerRef.current = 0;
+            showOutsideHover();
+          }, ZONE_HOVER_LEAVE_MS);
+        };
+
+        const queryTop = (point: MapMouseEvent["point"], ids: string[]) => {
+          const layers = ids.filter((id) => map.getLayer(id));
+          if (layers.length === 0) return undefined;
+          return map.queryRenderedFeatures(point, { layers })[0];
+        };
+
+        const pointerIsInteractive = (point: MapMouseEvent["point"]) => {
+          const garageHit = queryTop(point, [GARAGES_HIT_LAYER, GARAGES_FILL_LAYER]);
+          if (garageHit?.properties?.kind === "garage" && garageHit.properties?.id) return true;
+          const accessHit = queryTop(point, [
+            STADSERF_ACCESS_HIT_LAYER,
+            STADSERF_ACCESS_FILL_LAYER,
+          ]);
+          if (accessHit?.properties?.id) return true;
+          if (
+            map.getLayer(STADSERF_FILL_LAYER) != null &&
+            map.queryRenderedFeatures(point, { layers: [STADSERF_FILL_LAYER] }).length > 0
+          ) {
+            return true;
+          }
+          const layers = ZONE_CLICK_LAYERS.filter((id) => map.getLayer(id));
+          return (
+            layers.length > 0 &&
+            map.queryRenderedFeatures(point, { layers: [...layers] }).length > 0
+          );
+        };
+
+        const clearHoverEmphasis = () => {
+          cancelZoneLeave();
+          outsideHoverRef.current = false;
+          clearFeatureHover();
+          notifyFeatureHover(null);
+        };
+
+        const applyPointer = (point: MapMouseEvent["point"]) => {
+          if (selectionActiveRef.current) {
+            map.getCanvas().style.cursor = pointerIsInteractive(point) ? "pointer" : "";
+            if (featureHoverActive() || outsideHoverRef.current) clearHoverEmphasis();
             return;
           }
+          const garageHit = queryTop(point, [GARAGES_HIT_LAYER, GARAGES_FILL_LAYER]);
+          const garageId = garageHit?.properties?.id as string | undefined;
+          if (garageHit?.properties?.kind === "garage" && garageId) {
+            const garage = garageByIdRef.current.get(garageId);
+            map.getCanvas().style.cursor = "pointer";
+            outsideHoverRef.current = false;
+            cancelZoneLeave();
+            setHoveredZoneKey(map, null, false);
+            setAccessHover(map, null);
+            setStadserfHover(map, false);
+            setOverlayHover(map, GARAGES_SOURCE, garageId);
+            notifyFeatureHover(garage ? { kind: "garage", garage } : null);
+            return;
+          }
+          const accessHit = queryTop(point, [
+            STADSERF_ACCESS_HIT_LAYER,
+            STADSERF_ACCESS_FILL_LAYER,
+          ]);
+          const accessId = (accessHit?.properties?.id as string | undefined) ?? null;
+          if (accessId) {
+            map.getCanvas().style.cursor = "pointer";
+            outsideHoverRef.current = false;
+            cancelZoneLeave();
+            setHoveredZoneKey(map, null, false);
+            setOverlayHover(map, null, null);
+            setStadserfHover(map, false);
+            setAccessHover(map, accessId);
+            notifyFeatureHover({ kind: "stadserf-access", id: accessId });
+            return;
+          }
+          setAccessHover(map, null);
+          setOverlayHover(map, null, null);
+          const stadserfHit =
+            map.getLayer(STADSERF_FILL_LAYER) != null &&
+            map.queryRenderedFeatures(point, {
+              layers: [STADSERF_FILL_LAYER],
+            }).length > 0;
+          if (stadserfHit) {
+            map.getCanvas().style.cursor = "pointer";
+            outsideHoverRef.current = false;
+            cancelZoneLeave();
+            setHoveredZoneKey(map, null, false);
+            setStadserfHover(map, true);
+            notifyFeatureHover({ kind: "stadserf" });
+            return;
+          }
+          setStadserfHover(map, false);
           const layers = ZONE_CLICK_LAYERS.filter((id) => map.getLayer(id));
           const hit =
             layers.length > 0
-              ? map.queryRenderedFeatures(e.point, { layers: [...layers] })[0]
+              ? map.queryRenderedFeatures(point, { layers: [...layers] })[0]
               : undefined;
           const zoneKey = (hit?.properties?.zoneKey as string | undefined) ?? null;
-          map.getCanvas().style.cursor = zoneKey ? "pointer" : "";
-          setHoveredZoneKey(map, zoneKey);
+          if (zoneKey) {
+            outsideHoverRef.current = false;
+            cancelZoneLeave();
+            map.getCanvas().style.cursor = "pointer";
+            setHoveredZoneKey(map, zoneKey);
+            return;
+          }
+          map.getCanvas().style.cursor = "pointer";
+          if (featureHoverActive()) {
+            scheduleOutsideHover();
+            return;
+          }
+          cancelZoneLeave();
+          showOutsideHover();
         };
 
         const clearZoneHover = () => {
+          cancelZoneLeave();
+          outsideHoverRef.current = false;
           map.getCanvas().style.cursor = "";
           setHoveredZoneKey(map, null);
+          setAccessHover(map, null);
+          setOverlayHover(map, null, null);
+          setStadserfHover(map, false);
+          notifyFeatureHover(null);
         };
 
-        map.on("mousemove", onZonePointerMove);
+        map.on("mousemove", (e) => applyPointer(e.point));
         map.on("mouseout", clearZoneHover);
       }
     };
 
-    return whenStyleReady(map, apply);
+    const stop = whenStyleReady(map, apply);
+    return () => {
+      window.clearTimeout(zoneLeaveTimerRef.current);
+      zoneLeaveTimerRef.current = 0;
+      stop();
+    };
   }, [zones]);
 
   useEffect(() => {
@@ -869,39 +1220,62 @@ export function ParkingMap({
     const map = mapRef.current;
     if (!map || !stadserfBoundary) return;
     const apply = () => {
-      if (!map.getSource("stadserf-boundary")) {
-        map.addSource("stadserf-boundary", {
+      const existing = map.getSource(STADSERF_SOURCE) as
+        | (GeoJSONSource & { promoteId?: unknown })
+        | undefined;
+      if (existing && existing.promoteId !== "id") {
+        if (map.getLayer(STADSERF_LINE_LAYER)) map.removeLayer(STADSERF_LINE_LAYER);
+        if (map.getLayer(STADSERF_FILL_LAYER)) map.removeLayer(STADSERF_FILL_LAYER);
+        map.removeSource(STADSERF_SOURCE);
+      }
+      if (!map.getSource(STADSERF_SOURCE)) {
+        map.addSource(STADSERF_SOURCE, {
           type: "geojson",
           data: stadserfBoundary,
+          promoteId: "id",
         });
+      } else {
+        (map.getSource(STADSERF_SOURCE) as GeoJSONSource).setData(stadserfBoundary);
+      }
+
+      if (!map.getLayer(STADSERF_FILL_LAYER)) {
         map.addLayer({
-          id: "stadserf-line",
+          id: STADSERF_FILL_LAYER,
+          type: "fill",
+          source: STADSERF_SOURCE,
+          paint: {
+            "fill-color": STADSERF_FILL_COLOR,
+            "fill-opacity": STADSERF_FILL_OPACITY,
+          },
+        });
+      }
+
+      if (!map.getLayer(STADSERF_LINE_LAYER)) {
+        map.addLayer({
+          id: STADSERF_LINE_LAYER,
           type: "line",
-          source: "stadserf-boundary",
+          source: STADSERF_SOURCE,
           layout: {
             "line-cap": "round",
             "line-join": "round",
           },
           paint: {
-            "line-color": "#c084d4",
-            "line-width": [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              12,
-              1.5,
-              14,
-              2.25,
-              16,
-              2.75,
-            ],
-            "line-opacity": 0.58,
+            "line-color": STADSERF_LINE_COLOR,
+            "line-width": STADSERF_LINE_WIDTH,
+            "line-opacity": STADSERF_LINE_OPACITY,
             "line-dasharray": [2.4, 1.8],
           },
         });
-      } else {
-        (map.getSource("stadserf-boundary") as GeoJSONSource).setData(stadserfBoundary);
+      } else if (map.getLayer(STADSERF_FILL_LAYER)) {
+        map.moveLayer(STADSERF_FILL_LAYER, STADSERF_LINE_LAYER);
       }
+
+      applyStadserfPaint(map);
+      setStadserfFeatureState(map, {
+        selected: stadserfSelectedRef.current,
+        current: stadserfCurrentRef.current,
+        hover: stadserfHoverRef.current || hoveredAccessIdRef.current != null,
+      });
       ensureMapOverlayLayers(map);
     };
     return whenStyleReady(map, apply);
@@ -920,8 +1294,29 @@ export function ParkingMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    return whenStyleReady(map, () => setPnrOverlayData(map));
-  }, []);
+    return whenStyleReady(map, () => {
+      setStadserfFeatureState(map, {
+        selected: stadserfSelected,
+        current: stadserfCurrent,
+      });
+      if (map.getSource(STADSERF_ACCESS_SOURCE)) {
+        for (const access of stadserfAccessPoints()) {
+          map.setFeatureState(
+            { source: STADSERF_ACCESS_SOURCE, id: access.id },
+            { selected: access.id === selectedAccessId },
+          );
+        }
+      }
+      if (map.getSource(GARAGES_SOURCE)) {
+        for (const id of garageByIdRef.current.keys()) {
+          map.setFeatureState(
+            { source: GARAGES_SOURCE, id },
+            { selected: id === selectedGarageId },
+          );
+        }
+      }
+    });
+  }, [stadserfSelected, stadserfCurrent, selectedAccessId, selectedGarageId]);
 
   useEffect(() => {
     const map = mapRef.current;

@@ -3,12 +3,10 @@ import {
   buildAccuracyRing,
   buildDestinationCollection,
   buildGarageCollection,
-  buildPnrCollection,
   buildUserLocationCollection,
   garageOverlayText,
   GARAGE_COUNT_MIN_ZOOM,
 } from "@/lib/map-overlays";
-import { PNR_ZUIDERVAL } from "@/lib/pnr-zuiderval";
 import type { GarageMarkerData } from "@/lib/garages";
 
 const garage = (
@@ -67,11 +65,7 @@ describe("map overlay geometry", () => {
     expect(midLat).toBeCloseTo(lat, 6);
   });
 
-  it("anchors P+R and destination to their stored coordinates", () => {
-    expect(buildPnrCollection().features[0].geometry.coordinates).toEqual([
-      PNR_ZUIDERVAL.lon,
-      PNR_ZUIDERVAL.lat,
-    ]);
+  it("anchors a destination to its stored coordinates", () => {
     expect(
       buildDestinationCollection({ lon: 6.89, lat: 52.22 }).features[0].geometry
         .coordinates,

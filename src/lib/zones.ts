@@ -149,18 +149,36 @@ export function zoneDisplayName(zoneRaw: string | null): string {
   return z === "1B" ? "Zone 1B" : `Zone ${z}`;
 }
 
+/** Zone 1 / 1B keep a burgundy hue. Resting intensity is handled in paint, not by washing this out. */
+export function isCentrePaidZone(zoneRaw: string | null | undefined): boolean {
+  const z = normalizeZoneId(zoneRaw ?? null);
+  return z === "1" || z === "1B";
+}
+
 export function zoneFillColor(zoneRaw: string | null, layer: "paid" | "permit"): string {
   if (layer === "permit") return "#4a72a8";
-  const z = normalizeZoneId(zoneRaw);
-  if (z === "1" || z === "1B") return "#8f3d4a";
+  if (isCentrePaidZone(zoneRaw)) return "#8f3d4a";
   return "#9a6838";
 }
 
 export function zoneLineColor(zoneRaw: string | null, layer: "paid" | "permit"): string {
   if (layer === "permit") return "#7a9ec8";
-  const z = normalizeZoneId(zoneRaw);
-  if (z === "1" || z === "1B") return "#b8707c";
+  if (isCentrePaidZone(zoneRaw)) return "#b8707c";
   return "#b08850";
+}
+
+/** Same hue, lifted toward white so a selected stroke reads cleaner. */
+export function zoneLineActiveColor(zoneRaw: string | null, layer: "paid" | "permit"): string {
+  return brightenHex(zoneLineColor(zoneRaw, layer), 0.32);
+}
+
+function brightenHex(hex: string, mix: number): string {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const channel = (value: number) => Math.round(value + (255 - value) * mix);
+  const r = channel((n >> 16) & 255);
+  const g = channel((n >> 8) & 255);
+  const b = channel(n & 255);
+  return `#${[r, g, b].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
 }
 
 /** Island zone badge on dark liquid surfaces */

@@ -18,6 +18,7 @@ export type ZoneLabelProperties = {
   emphasized: boolean;
   labelSelected: boolean;
   labelHover: boolean;
+  centre: boolean;
 };
 
 /** Must match glyphs available on OpenFreeMap / Liberty style. */
@@ -120,6 +121,7 @@ function buildPaidZoneLabels(
         emphasized: false,
         labelSelected: false,
         labelHover: false,
+        centre: label === "1" || label === "1B",
       },
       geometry: {
         type: "Point",
@@ -173,6 +175,7 @@ function buildPermitZoneLabels(
         emphasized: false,
         labelSelected: false,
         labelHover: false,
+        centre: false,
       },
       geometry: {
         type: "Point",
@@ -184,11 +187,39 @@ function buildPermitZoneLabels(
   return { features, nextId: numericId };
 }
 
+/**
+ * The northern 1B centroid falls on Zone 8's southern edge.
+ * This anchor sits inside the northern 1B band.
+ * The eastern 1B label stays on its own centroid.
+ */
+const NORTHERN_ZONE_1B_ANCHOR: [number, number] = [6.893458, 52.224134];
+
+function placeNorthernZone1B(
+  features: Feature<Point, ZoneLabelProperties>[],
+): void {
+  const labels = features.filter((feature) => feature.properties.label === "1B");
+  const northern = labels.reduce<Feature<Point, ZoneLabelProperties> | null>(
+    (highest, feature) => {
+      if (!highest) return feature;
+      return feature.geometry.coordinates[1] > highest.geometry.coordinates[1]
+        ? feature
+        : highest;
+    },
+    null,
+  );
+  if (!northern) return;
+  northern.geometry.coordinates = [
+    NORTHERN_ZONE_1B_ANCHOR[0],
+    NORTHERN_ZONE_1B_ANCHOR[1],
+  ];
+}
+
 /** Paid zone numbers (large) + at most one subtle permit label per area. */
 export function buildZoneLabelPoints(
   zones: ZoneCollections,
 ): FeatureCollection<Point, ZoneLabelProperties> {
   const paid = buildPaidZoneLabels(zones, 0);
+  placeNorthernZone1B(paid.features);
   const permit = buildPermitZoneLabels(zones, paid.nextId);
   return {
     type: "FeatureCollection",

@@ -274,6 +274,19 @@ export function statusPanelColumns(
   };
 }
 
+/** General weekday and Sunday hours for a paid zone. Not the live status. */
+export function formatGeneralPaidHours(zone: PaidZoneId): string {
+  const schedule = paidScheduleForZone(zone);
+  const span = (slot: {
+    startHour: number;
+    startMinute: number;
+    endHour: number;
+    endMinute: number;
+  }) =>
+    `${formatClockTime(slot.startHour, slot.startMinute)}–${formatClockTime(slot.endHour, slot.endMinute)}`;
+  return `Ma–za ${span(schedule.weekday)} · Zo ${span(schedule.sunday)}`;
+}
+
 export function composePanelSecondary(input: {
   context: StatusPanelContext;
   fact: string;

@@ -1,6 +1,6 @@
 # Enske Park
 
-Mobiele parkeerutility voor Enschede: volledige kaart, live parkeerstatus op basis van je locatie, zone-tarieven, countdown, kosteninschatting, garages, P+R en lichte adreszoek.
+Mobiele parkeerutility voor Enschede: volledige kaart, live parkeerstatus op basis van je locatie, zone-tarieven, countdown, kosteninschatting, garages en lichte adreszoek.
 
 **Productie:** [enske-park.vercel.app](https://enske-park.vercel.app)
 
@@ -36,7 +36,8 @@ Het paneel houdt altijd dezelfde kolommen:
 | **Hover** | Desktop, tijdelijk · secundair “Zone onder muis · …” (geen ✕) |
 | **Bestemming** | Zoek icoon → adres → gele pin · “Bestemming · …” |
 | **Garage** | Tik op **P**-marker (RDW, live indien beschikbaar) |
-| **P+R Zuiderval** | Tik op **P+R**-marker + Route-link |
+| **Stadserf** | Tik in de voetgangerszone · `STADSERF` + venstertijd of ontheffing. Gaat vóór Zone 1. |
+| **Toegang Stadserf** | Tik op een magenta openingsmarker op de grens · straat + in-/uitgang + dezelfde venstertijd/ontheffing |
 | **Info** | Info-knop |
 
 ✕ of de locatieknop → terug naar live GPS. Hover verlaat de zone → terug naar live GPS.
@@ -46,9 +47,9 @@ Het paneel houdt altijd dezelfde kolommen:
 1. GPS-positie  
 2. Huidige zone (highlight)  
 3. Betaalzones + zone-nummers  
-4. **Autoluwe binnenstad / stadserf** (magenta stippellijn — NDW zero-emissiezone, gelijk aan het stadserf)  
-5. Garages (**P** / **P 184** / **P VOL**)  
-6. **P+R Zuiderval** (`P+R` + €3)  
+4. **Autoluwe binnenstad / stadserf** (zachte paarse tint + magenta stippellijn — tikbaar binnengebied)  
+5. **Stadserf-toegangen** (compacte magenta markeringen op de grens, zichtbaar op elk zoomniveau; straatnaam alleen dichtbij)  
+6. Garages (**P** / **P 184** / **P VOL**)  
 7. Vergunningzones (rustig)  
 8. Zoek-bestemming (gele pin)
 
@@ -81,9 +82,18 @@ Configuratie: `src/data/duration-restrictions-data.ts` (polygonen, geen zone-bre
 
 Momenteel geverifieerd opgenomen: **Stationsplein (30 min)**. Meer straten alleen toevoegen met betrouwbare geometrie + bron.
 
-### P+R Zuiderval
+### Stadserf / voetgangerszone binnenstad
 
-`src/lib/pnr-zuiderval.ts` — € 3 per dag, bus naar centrum max. 5 personen (bron: [enschede.nl](https://www.enschede.nl/parkeertarieven-en-parkeerlocaties)).
+Regels: `src/lib/stadserf.ts` (leges jaarlijks bijwerken). Geometrie: `src/data/stadserf-boundary-data.ts`.
+
+Bron: [Toegang en parkeren binnenstad](https://www.enschede.nl/toegang-en-parkeren-binnenstad).
+
+- Zonder ontheffing: **07:00–11:00** (Europe/Amsterdam) alleen **laden/lossen** — geen gratis parkeren
+- Daarbuiten: **ontheffing** vereist. Dagontheffing toegang **€ 17,25**, 30 uur geldig (00:00–06:00 de volgende ochtend)
+- Deze ontheffing geeft **geen parkeerrecht**
+- Voertuigopeningen: `src/data/stadserf-access-points-data.ts` — punten liggen op de grens (OSM-straat ∩ ring), richting uit de gemeentelijke toegangskaart / bebording 2025
+
+Live GPS in het stadserf toont deze toegangstatus in plaats van `€ 3,85/u` van Zone 1.
 
 ### Duitse feestdag
 
@@ -114,7 +124,7 @@ Next.js 16 · React 19 · TypeScript · Tailwind v4 · MapLibre 6 · Turf · dat
 src/
 ├── app/api/          # zones, garages, geocode, overlays
 ├── components/       # enske-park-app, parking-map, parking-context-panel, map-search-control
-├── data/             # duration-restrictions-data, stadserf-boundary-data
+├── data/             # duration-restrictions-data, stadserf-boundary-data, stadserf-access-points-data
 ├── lib/
 │   ├── tariffs.ts
 │   ├── holidays-nl.ts / holidays-de.ts
@@ -122,7 +132,7 @@ src/
 │   ├── parking-status.ts
 │   ├── parking-cost-estimator.ts
 │   ├── duration-restrictions.ts
-│   ├── garages.ts / pnr-zuiderval.ts
+│   ├── garages.ts / stadserf.ts
 │   └── panel-context.ts
 ```
 
@@ -149,8 +159,8 @@ Optioneel: `NEXT_PUBLIC_MAP_STYLE_URL` (zie `.env.example`).
 1. **Tarieven/tijden:** `tariffs.ts`  
 2. **Feestdagen:** `holidays-nl.ts` (soorten blijven leidend)  
 3. **Max. duur straten:** `duration-restrictions-data.ts` + bronvermelding  
-4. **Stadserf-lijn:** `stadserf-boundary-data.ts` — buitenring van NDW `ZE Enschede`; opnieuw ophalen als de gemeente de zone wijzigt.  
-5. **P+R / garages:** `pnr-zuiderval.ts`, `garages.ts`, RDW-id’s  
+4. **Stadserf:** `stadserf.ts` (venstertijd + € dagontheffing), `stadserf-boundary-data.ts` (NDW `ZE Enschede`-polygoon) en `stadserf-access-points-data.ts` (voertuigopeningen op de grens).  
+5. **Garages:** `garages.ts`, RDW-id’s  
 
 ---
 

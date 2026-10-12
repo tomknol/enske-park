@@ -75,7 +75,15 @@ export function MapSearchControl({ open, onOpenChange, onSelect }: MapSearchCont
   }
 
   return (
-    <div className="map-search pointer-events-auto">
+    <div
+      className="map-search pointer-events-auto"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeSearch();
+      }}
+    >
       <div className="map-search-bar">
         <Search className="map-search-icon h-4 w-4 shrink-0 opacity-50" aria-hidden />
         <input

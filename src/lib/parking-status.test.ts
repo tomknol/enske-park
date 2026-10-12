@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { fromZonedTime } from "date-fns-tz";
 import {
   composePanelSecondary,
+  formatGeneralPaidHours,
   resolveParkingAtLocation,
   statusPanelColumns,
 } from "@/lib/parking-status";
@@ -115,5 +116,14 @@ describe("status panel columns", () => {
     ).toBe("Geselecteerde locatie · Volgens gemeentelijke zonekaart");
     expect(columns.right).toBe("GRATIS");
     expect(columns.left).toBe("vanaf morgen 09:00");
+  });
+});
+
+describe("general paid hours", () => {
+  it("reads zone 1 and zone 2–8 hours from the tariff schedule", () => {
+    expect(formatGeneralPaidHours("1")).toBe("Ma–za 09:00–23:00 · Zo 13:00–23:00");
+    expect(formatGeneralPaidHours("1B")).toBe("Ma–za 09:00–23:00 · Zo 13:00–23:00");
+    expect(formatGeneralPaidHours("6")).toBe("Ma–za 09:00–19:00 · Zo 13:00–19:00");
+    expect(formatGeneralPaidHours("8")).toBe(formatGeneralPaidHours("2"));
   });
 });

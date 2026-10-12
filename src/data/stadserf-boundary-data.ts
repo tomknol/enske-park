@@ -1,4 +1,4 @@
-import type { FeatureCollection, LineString } from "geojson";
+import type { FeatureCollection, Polygon } from "geojson";
 
 /**
  * Official Enschede city-centre restricted-access boundary.
@@ -7,26 +7,33 @@ import type { FeatureCollection, LineString } from "geojson";
  * The municipality states that the voetgangerszone / stadserf IS this
  * zero-emission zone (enschede.nl/zero-emissiezone, since 1 July 2025).
  *
- * Stored as the exterior ring only (one closed LineString; no holes).
+ * Stored as one closed Polygon (exterior ring only; no holes). The same
+ * ring is both the hit area and the visible tint.
  * Previous hand-sketched loop sat too far north inside Zone 1 and is not used.
+ *
+ * Access rules (venstertijd, dagontheffing): see `src/lib/stadserf.ts`.
  */
-export const stadserfBoundaryData: FeatureCollection<LineString> = {
+export const stadserfBoundaryData: FeatureCollection<Polygon> = {
   type: "FeatureCollection",
   features: [
     {
       type: "Feature",
+      id: "voetgangerszone-binnenstad",
       properties: {
         id: "voetgangerszone-binnenstad",
+        kind: "stadserf",
         label: "Autoluwe binnenstad",
         source: "NDW emissiezones — ZE Enschede (gmb-2025-154132)",
         sourceUrl: "https://data.ndw.nu/api/rest/static-road-data/emission-zones/v1/map",
         municipalUrl: "https://www.enschede.nl/zero-emissiezone",
+        accessRulesUrl: "https://www.enschede.nl/toegang-en-parkeren-binnenstad",
         geometryNote:
           "Exterior ring of the official zero-emission / stadserf zone. Update from NDW if the municipal boundary changes.",
       },
       geometry: {
-        type: "LineString",
+        type: "Polygon",
         coordinates: [
+          [
           [6.899886, 52.216291],
           [6.900015, 52.216373],
           [6.900111, 52.216853],
@@ -78,7 +85,8 @@ export const stadserfBoundaryData: FeatureCollection<LineString> = {
           [6.894296, 52.218053],
           [6.896667, 52.217727],
           [6.896351, 52.216896],
-          [6.899886, 52.216291]
+          [6.899886, 52.216291],
+          ],
         ],
       },
     },
