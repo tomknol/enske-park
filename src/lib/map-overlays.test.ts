@@ -4,8 +4,7 @@ import {
   buildDestinationCollection,
   buildGarageCollection,
   buildUserLocationCollection,
-  garageOverlayText,
-  GARAGE_COUNT_MIN_ZOOM,
+  garageDetailText,
 } from "@/lib/map-overlays";
 import type { GarageMarkerData } from "@/lib/garages";
 
@@ -26,22 +25,29 @@ const garage = (
 });
 
 describe("garage overlay labels", () => {
-  it("keeps compact P below the count zoom", () => {
-    expect(garageOverlayText(garage(), GARAGE_COUNT_MIN_ZOOM - 0.1)).toBe("P");
+  it("shows the free-space count at every zoom when it is live", () => {
+    expect(garageDetailText(garage({ vacant: 184 }))).toBe("P 184");
   });
 
-  it("shows vacant count from the stored coordinates at street zoom", () => {
-    expect(garageOverlayText(garage(), GARAGE_COUNT_MIN_ZOOM)).toBe("P 84");
+  it("shows VOL only for a fresh empty garage", () => {
+    expect(garageDetailText(garage({ vacant: 0, level: "full" }))).toBe("P VOL");
   });
 
-  it("anchors garage GeoJSON to the stored lon/lat", () => {
-    const feature = buildGarageCollection([garage()]).features[0];
-    expect(feature.geometry.coordinates).toEqual([6.901198, 52.216916]);
-    expect(feature.properties).toMatchObject({
-      kind: "garage",
-      textCompact: "P",
-      textDetail: "P 84",
-    });
+  it("shows P when occupancy is unavailable", () => {
+    expect(
+      garageDetailText(garage({ vacant: null, live: false, level: "unknown" })),
+    ).toBe("P");
+  });
+
+  it("keeps the same lon/lat when the marker text changes", () => {
+    const quiet = buildGarageCollection([
+      garage({ vacant: null, live: false, level: "unknown" }),
+    ]).features[0];
+    const live = buildGarageCollection([garage({ vacant: 184 })]).features[0];
+    expect(quiet.geometry.coordinates).toEqual([6.901198, 52.216916]);
+    expect(live.geometry.coordinates).toEqual(quiet.geometry.coordinates);
+    expect(quiet.properties).toMatchObject({ textDetail: "P" });
+    expect(live.properties).toMatchObject({ textDetail: "P 184" });
   });
 });
 

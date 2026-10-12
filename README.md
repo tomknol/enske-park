@@ -35,7 +35,7 @@ Het paneel houdt altijd dezelfde kolommen:
 | **Punt buiten zone** | Tik op leeg kaartgebied · “Geselecteerde locatie · …” + ✕ |
 | **Hover** | Desktop, tijdelijk · secundair “Zone onder muis · …” (geen ✕) |
 | **Bestemming** | Zoek icoon → adres → gele pin · “Bestemming · …” |
-| **Garage** | Tik op **P**-marker (RDW, live indien beschikbaar) |
+| **Garage** | Tik op de blauwe **P**-marker. `P 184` is het aantal vrije plaatsen via RDW/NPR, alleen als die telling jonger is dan 5 minuten |
 | **Stadserf** | Tik in de voetgangerszone · `STADSERF` + venstertijd of ontheffing. Gaat vóór Zone 1. |
 | **Toegang Stadserf** | Tik op een magenta openingsmarker op de grens · straat + in-/uitgang + dezelfde venstertijd/ontheffing |
 | **Info** | Info-knop |
@@ -106,7 +106,7 @@ Hint NRW/Niedersachsen (`holidays-de.ts`). Bij Duitse feestdag + ≥2 live drukk
 | Route | Functie |
 | --- | --- |
 | `GET /api/zones` | Gemeente ArcGIS → GeoJSON |
-| `GET /api/garages` | RDW NPR static + dynamic |
+| `GET /api/garages` | RDW / Nationaal Parkeerregister. Vrije plaatsen alleen bij een telling jonger dan 5 minuten |
 | `GET /api/geocode` | Nominatim-proxy (Enschede) |
 | `GET /api/overlays` | Max-duur + stadserf JSON |
 
@@ -160,7 +160,7 @@ Optioneel: `NEXT_PUBLIC_MAP_STYLE_URL` (zie `.env.example`).
 2. **Feestdagen:** `holidays-nl.ts` (soorten blijven leidend)  
 3. **Max. duur straten:** `duration-restrictions-data.ts` + bronvermelding  
 4. **Stadserf:** `stadserf.ts` (venstertijd + € dagontheffing), `stadserf-boundary-data.ts` (NDW `ZE Enschede`-polygoon) en `stadserf-access-points-data.ts` (voertuigopeningen op de grens).  
-5. **Garages:** `garages.ts`, RDW-id’s  
+5. **Garages:** `npr-garages.ts` (Enschede-faciliteiten 153_HEEK, 153_IRE, 153_MOO, 153_STAT, 153_HERM, 153_BROU) en `garages.ts`  
 
 ---
 

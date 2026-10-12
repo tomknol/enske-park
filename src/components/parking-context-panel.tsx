@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { format } from "date-fns";
 import { X } from "lucide-react";
 import { ParkingEstimator } from "@/components/parking-estimator";
 import type { DurationRestriction } from "@/lib/duration-restrictions";
@@ -17,7 +16,7 @@ import {
   type HoveredMapFeature,
   type MapPanelContext,
 } from "@/lib/panel-context";
-import type { GarageMarkerData } from "@/lib/garages";
+import { garagePanelCopy, type GarageMarkerData } from "@/lib/garages";
 import {
   getStadserfAccessPoint,
   stadserfAccessDirectionLabel,
@@ -463,33 +462,17 @@ function PanelContents(props: ParkingContextPanelProps) {
         <p className="park-info-title">ENSKE PARK</p>
         <p className="park-info-body">
           Parkeertarieven en zones voor Enschede. Borden ter plaatse zijn leidend.
+          Live garagebezetting komt van RDW / Nationaal Parkeerregister en verschijnt
+          alleen als de telling recent is.
         </p>
       </div>
     );
   }
 
   if (mapContext?.type === "garage") {
-    const g = mapContext.garage;
-    const left =
-      g.lastUpdated && g.live
-        ? format(new Date(g.lastUpdated), "HH:mm")
-        : g.capacity
-          ? `${g.capacity.toLocaleString("nl-NL")} pl.`
-          : "—";
-    const center = g.shortLabel.toUpperCase();
-    const right =
-      g.live && g.vacant != null ? `${g.vacant.toLocaleString("nl-NL")} vrij` : "—";
-    const secondary =
-      g.live && g.vacant != null
-        ? `${g.capacity?.toLocaleString("nl-NL") ?? "—"} plaatsen · bijgewerkt ${left}`
-        : "Garage · bezetting onbekend";
-
     return (
       <StatusModule
-        left={left}
-        center={center}
-        right={right}
-        secondary={secondary}
+        {...garagePanelCopy(mapContext.garage)}
         edge="garage"
         onClear={onClearContext}
       />
@@ -689,22 +672,9 @@ function PanelContents(props: ParkingContextPanelProps) {
 }
 
 function GarageHoverModule({ garage }: { garage: GarageMarkerData }) {
-  const updated =
-    garage.live && garage.lastUpdated
-      ? format(new Date(garage.lastUpdated), "HH:mm")
-      : null;
-  const vacant =
-    garage.live && garage.vacant != null
-      ? `${garage.vacant.toLocaleString("nl-NL")} VRIJ`
-      : "—";
   return (
     <StatusModule
-      left="GARAGE"
-      center={garage.shortLabel.toUpperCase()}
-      right={vacant}
-      secondary={
-        updated ? `Live bezetting · bijgewerkt ${updated}` : "Garage · bezetting onbekend"
-      }
+      {...garagePanelCopy(garage)}
       tone="neutral"
       edge="garage"
     />

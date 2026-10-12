@@ -5,11 +5,7 @@ import {
   type FilterSpecification,
   type Map as MaplibreMap,
 } from "maplibre-gl";
-import {
-  formatGarageMarkerLabel,
-  type GarageMarkerData,
-  type GarageOccupancyLevel,
-} from "@/lib/garages";
+import { garageMarkerText, type GarageMarkerData } from "@/lib/garages";
 import {
   buildStadserfAccessCollection,
   createStadserfAccessIconImageData,
@@ -25,7 +21,7 @@ import {
 import { mapPaintTransition, motionMs, MOTION, prefersReducedMotion } from "@/lib/motion";
 import { ZONE_LABEL_FONT } from "@/lib/zone-labels";
 
-export const GARAGE_COUNT_MIN_ZOOM = 14.5;
+export const GARAGE_BADGE_ICON = "garage-badge-v6";
 
 function markerEmphasisScale(hover = 1.05): ExpressionSpecification {
   return [
@@ -80,14 +76,7 @@ const EMPTY_COLLECTION: FeatureCollection = {
 };
 
 export function garageDetailText(g: GarageMarkerData): string {
-  if (g.live && g.level === "full") return "P VOL";
-  if (g.live && g.vacant != null && g.level !== "full") return `P ${g.vacant}`;
-  return "P";
-}
-
-export function garageOverlayText(g: GarageMarkerData, zoom: number): string {
-  if (zoom < GARAGE_COUNT_MIN_ZOOM) return "P";
-  return garageDetailText(g);
+  return garageMarkerText(g.vacant, g.live);
 }
 
 export function buildGarageCollection(
@@ -104,9 +93,11 @@ export function buildGarageCollection(
         properties: {
           kind: "garage",
           id: g.id,
-          textCompact: "P",
+          textCompact: garageDetailText(g),
           textDetail: garageDetailText(g),
-          ariaLabel: `${g.label}, ${g.live ? formatGarageMarkerLabel(g.level as GarageOccupancyLevel, g.vacant) : "Bezetting onbekend"}`,
+          ariaLabel: `${g.label}, ${
+            g.live && g.vacant != null ? garageDetailText(g) : "Bezetting onbekend"
+          }`,
         },
       };
       return [feature];
@@ -216,6 +207,83 @@ function setSourceData(map: MaplibreMap, id: string, data: FeatureCollection) {
     return;
   }
   map.addSource(id, { type: "geojson", data });
+}
+
+const GARAGE_BADGE_PIXEL_RATIO = 2;
+const GARAGE_BADGE_PAD = 10;
+const GARAGE_BADGE_SHAPE_W = 44;
+const GARAGE_BADGE_SHAPE_H = 44;
+const GARAGE_BADGE_RADIUS = 10;
+
+/** Negative inside the rounded square. Distance is in bitmap pixels. */
+function roundedRectDistance(
+  px: number,
+  py: number,
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+  radius: number,
+): number {
+  const halfW = width / 2;
+  const halfH = height / 2;
+  const qx = Math.abs(px - (left + halfW)) - (halfW - radius);
+  const qy = Math.abs(py - (top + halfH)) - (halfH - radius);
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - radius;
+}
+
+export function createGarageBadgeImageData(): ImageData {
+  const width = GARAGE_BADGE_SHAPE_W + GARAGE_BADGE_PAD * 2;
+  const height = GARAGE_BADGE_SHAPE_H + GARAGE_BADGE_PAD * 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Garage badge canvas is unavailable");
+  const image = ctx.createImageData(width, height);
+  const pixels = image.data;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const distance = roundedRectDistance(
+        x + 0.5,
+        y + 0.5,
+        GARAGE_BADGE_PAD,
+        GARAGE_BADGE_PAD,
+        GARAGE_BADGE_SHAPE_W,
+        GARAGE_BADGE_SHAPE_H,
+        GARAGE_BADGE_RADIUS,
+      );
+      const screenDistance = distance / GARAGE_BADGE_PIXEL_RATIO;
+      const alpha = Math.max(0, Math.min(255, Math.round(192 - screenDistance * (255 / 8))));
+      const offset = (y * width + x) * 4;
+      pixels[offset] = 255;
+      pixels[offset + 1] = 255;
+      pixels[offset + 2] = 255;
+      pixels[offset + 3] = alpha;
+    }
+  }
+  return image;
+}
+
+function ensureGarageBadgeImage(map: MaplibreMap) {
+  if (typeof document === "undefined" || map.hasImage(GARAGE_BADGE_ICON)) return;
+  const shapeRight = GARAGE_BADGE_PAD + GARAGE_BADGE_SHAPE_W;
+  const shapeBottom = GARAGE_BADGE_PAD + GARAGE_BADGE_SHAPE_H;
+  map.addImage(GARAGE_BADGE_ICON, createGarageBadgeImageData(), {
+    pixelRatio: GARAGE_BADGE_PIXEL_RATIO,
+    sdf: true,
+    content: [
+      GARAGE_BADGE_PAD + 4,
+      GARAGE_BADGE_PAD + 4,
+      shapeRight - 4,
+      shapeBottom - 4,
+    ],
+    stretchX: [[GARAGE_BADGE_PAD + 12, shapeRight - 12]],
+    stretchY: [[GARAGE_BADGE_PAD + 12, shapeBottom - 12]],
+    // TextFit is a const enum and is not importable. The runtime values are these strings.
+    textFitWidth: "stretchOnly",
+    textFitHeight: "proportional",
+  } as NonNullable<Parameters<MaplibreMap["addImage"]>[2]>);
 }
 
 function ensureStadserfAccessImages(map: MaplibreMap) {
@@ -433,13 +501,22 @@ export function ensureMapOverlayLayers(map: MaplibreMap) {
     });
   }
 
+  for (const id of [GARAGES_LABEL_LAYER, GARAGES_LABEL_DETAIL_LAYER]) {
+    if (map.getLayer(id)) map.removeLayer(id);
+  }
+  const existingGarageFill = map.getLayer(GARAGES_FILL_LAYER);
+  if (existingGarageFill && existingGarageFill.type !== "symbol") {
+    map.removeLayer(GARAGES_FILL_LAYER);
+  }
+  ensureGarageBadgeImage(map);
+
   if (!map.getLayer(GARAGES_HIT_LAYER)) {
     map.addLayer({
       id: GARAGES_HIT_LAYER,
       type: "circle",
       source: GARAGES_SOURCE,
       paint: {
-        "circle-radius": 16,
+        "circle-radius": 18,
         "circle-color": "#000000",
         "circle-opacity": 0,
       },
@@ -449,117 +526,102 @@ export function ensureMapOverlayLayers(map: MaplibreMap) {
   if (!map.getLayer(GARAGES_FILL_LAYER)) {
     map.addLayer({
       id: GARAGES_FILL_LAYER,
-      type: "circle",
-      source: GARAGES_SOURCE,
-      paint: {
-        "circle-radius": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          GARAGE_COUNT_MIN_ZOOM - 0.05,
-          ["*", markerEmphasisScale(), 10],
-          GARAGE_COUNT_MIN_ZOOM,
-          ["*", markerEmphasisScale(), 14],
-        ],
-        "circle-radius-transition": mapPaintTransition(MOTION.fast),
-        "circle-color": [
-          "case",
-          [
-            "any",
-            ["boolean", ["feature-state", "hover"], false],
-            ["boolean", ["feature-state", "selected"], false],
-          ],
-          "rgba(18, 24, 34, 0.96)",
-          "rgba(10, 13, 19, 0.9)",
-        ],
-        "circle-stroke-width": [
-          "case",
-          ["boolean", ["feature-state", "selected"], false],
-          1.6,
-          ["boolean", ["feature-state", "hover"], false],
-          1.35,
-          1,
-        ],
-        "circle-stroke-width-transition": mapPaintTransition(MOTION.fast),
-        "circle-stroke-color": [
-          "case",
-          ["boolean", ["feature-state", "selected"], false],
-          "rgba(186, 214, 242, 0.72)",
-          ["boolean", ["feature-state", "hover"], false],
-          "rgba(160, 196, 230, 0.55)",
-          "rgba(120, 155, 195, 0.32)",
-        ],
-        "circle-stroke-color-transition": mapPaintTransition(MOTION.fast),
-        "circle-color-transition": mapPaintTransition(MOTION.fast),
-        "circle-pitch-alignment": "viewport",
-        "circle-pitch-scale": "viewport",
-      },
-    });
-  }
-
-  const garageLabelLayout = {
-    "text-font": [...ZONE_LABEL_FONT],
-    "text-size": 10,
-    "text-anchor": "center" as const,
-    "text-allow-overlap": true,
-    "text-ignore-placement": true,
-    "text-optional": false,
-    "text-padding": 0,
-  };
-  const garageLabelPaint = {
-    "text-color": [
-      "case",
-      markerEmphasisActive(),
-      "#e8f3fc",
-      "#b4cce8",
-    ] as ExpressionSpecification,
-    "text-color-transition": mapPaintTransition(MOTION.fast),
-    "text-halo-color": "rgba(10, 13, 19, 0.92)",
-    "text-halo-width": 1.6,
-    "text-opacity": [
-      "case",
-      markerEmphasisActive(),
-      1,
-      0.86,
-    ] as ExpressionSpecification,
-    "text-opacity-transition": mapPaintTransition(MOTION.fast),
-  };
-
-  if (!map.getLayer(GARAGES_LABEL_LAYER)) {
-    map.addLayer({
-      id: GARAGES_LABEL_LAYER,
       type: "symbol",
       source: GARAGES_SOURCE,
-      maxzoom: GARAGE_COUNT_MIN_ZOOM,
       layout: {
-        ...garageLabelLayout,
-        "text-field": ["get", "textCompact"],
-      },
-      paint: garageLabelPaint,
-    });
-  }
-
-  if (!map.getLayer(GARAGES_LABEL_DETAIL_LAYER)) {
-    map.addLayer({
-      id: GARAGES_LABEL_DETAIL_LAYER,
-      type: "symbol",
-      source: GARAGES_SOURCE,
-      minzoom: GARAGE_COUNT_MIN_ZOOM,
-      layout: {
-        ...garageLabelLayout,
+        "icon-image": GARAGE_BADGE_ICON,
+        "icon-anchor": "center",
+        "icon-text-fit": "width",
+        "icon-text-fit-padding": [1, 4, 1, 4],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+        "icon-pitch-alignment": "viewport",
         "text-field": ["get", "textDetail"],
+        "text-font": [...ZONE_LABEL_FONT],
+        "text-size": 10,
+        "text-anchor": "center",
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+        "text-optional": false,
+        "text-padding": 0,
+        "text-max-width": 12,
+        "text-pitch-alignment": "viewport",
       },
-      paint: garageLabelPaint,
     });
   }
 
-  for (const id of [GARAGES_LABEL_LAYER, GARAGES_LABEL_DETAIL_LAYER]) {
-    if (!map.getLayer(id)) continue;
-    map.setPaintProperty(id, "text-color", garageLabelPaint["text-color"]);
-    map.setPaintProperty(id, "text-color-transition", garageLabelPaint["text-color-transition"]);
-    map.setPaintProperty(id, "text-opacity", garageLabelPaint["text-opacity"]);
-    map.setPaintProperty(id, "text-opacity-transition", garageLabelPaint["text-opacity-transition"]);
-  }
+  map.setLayoutProperty(GARAGES_FILL_LAYER, "icon-image", GARAGE_BADGE_ICON);
+  map.setLayoutProperty(GARAGES_FILL_LAYER, "icon-text-fit", "width");
+  map.setLayoutProperty(GARAGES_FILL_LAYER, "icon-text-fit-padding", [1, 4, 1, 4]);
+  map.setLayoutProperty(GARAGES_FILL_LAYER, "text-size", 10);
+
+  const garageHaloWidth: ExpressionSpecification = [
+    "case",
+    ["boolean", ["feature-state", "selected"], false],
+    3.25,
+    ["boolean", ["feature-state", "hover"], false],
+    2.15,
+    1.35,
+  ];
+  const garageHaloColor: ExpressionSpecification = [
+    "case",
+    ["boolean", ["feature-state", "selected"], false],
+    "#f4f8fd",
+    ["boolean", ["feature-state", "hover"], false],
+    "#d7ebfb",
+    "#7eb0e0",
+  ];
+  map.setPaintProperty(GARAGES_FILL_LAYER, "icon-color", [
+    "case",
+    ["boolean", ["feature-state", "selected"], false],
+    "#1b365c",
+    ["boolean", ["feature-state", "hover"], false],
+    "#163050",
+    "#102444",
+  ]);
+  map.setPaintProperty(
+    GARAGES_FILL_LAYER,
+    "icon-color-transition",
+    mapPaintTransition(MOTION.fast),
+  );
+  map.setPaintProperty(GARAGES_FILL_LAYER, "icon-opacity", [
+    "case",
+    markerEmphasisActive(),
+    1,
+    0.92,
+  ]);
+  map.setPaintProperty(
+    GARAGES_FILL_LAYER,
+    "icon-opacity-transition",
+    mapPaintTransition(MOTION.fast),
+  );
+  map.setPaintProperty(GARAGES_FILL_LAYER, "icon-halo-width", garageHaloWidth);
+  map.setPaintProperty(
+    GARAGES_FILL_LAYER,
+    "icon-halo-width-transition",
+    mapPaintTransition(MOTION.fast),
+  );
+  map.setPaintProperty(GARAGES_FILL_LAYER, "icon-halo-color", garageHaloColor);
+  map.setPaintProperty(
+    GARAGES_FILL_LAYER,
+    "icon-halo-color-transition",
+    mapPaintTransition(MOTION.fast),
+  );
+  map.setPaintProperty(GARAGES_FILL_LAYER, "icon-halo-blur", 0.15);
+  map.setPaintProperty(GARAGES_FILL_LAYER, "text-color", [
+    "case",
+    ["boolean", ["feature-state", "selected"], false],
+    "#ffffff",
+    ["boolean", ["feature-state", "hover"], false],
+    "#f4f8fd",
+    "#d5e6f6",
+  ]);
+  map.setPaintProperty(
+    GARAGES_FILL_LAYER,
+    "text-color-transition",
+    mapPaintTransition(MOTION.fast),
+  );
+  map.setPaintProperty(GARAGES_FILL_LAYER, "text-halo-width", 0);
 
   if (!map.getLayer(DESTINATION_LAYER)) {
     map.addLayer({

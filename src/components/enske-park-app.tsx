@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toZonedTime } from "date-fns-tz";
 import { Crosshair, Info } from "lucide-react";
 import {
@@ -13,7 +13,7 @@ import { useGeolocation } from "@/hooks/use-geolocation";
 import { useStableUserZone } from "@/hooks/use-stable-user-zone";
 import { stadserfBoundaryData as stadserfBoundary } from "@/data/stadserf-boundary-data";
 import { findDurationRestriction } from "@/lib/duration-restrictions";
-import type { GarageMarkerData } from "@/lib/garages";
+import { clearGarageLive, garageFromApi, type GarageMarkerData } from "@/lib/garages";
 import { isRelevantGermanHoliday } from "@/lib/holidays-de";
 import {
   hoverReplacesContext,
@@ -69,14 +69,24 @@ export function EnskeParkApp() {
     }
   }, []);
 
+  const garageRequestRef = useRef(0);
+
   const loadGarages = useCallback(async () => {
+    const requestId = ++garageRequestRef.current;
     try {
       const res = await fetch("/api/garages", { cache: "no-store" });
-      if (!res.ok) return;
+      if (requestId !== garageRequestRef.current) return;
+      if (!res.ok) throw new Error("garages");
       const data = await res.json();
-      setGarages(data.garages);
+      if (!Array.isArray(data?.garages)) throw new Error("garages");
+      const next = data.garages
+        .map((garage: unknown) => garageFromApi(garage))
+        .filter((garage: GarageMarkerData | null): garage is GarageMarkerData => garage != null);
+      if (next.length === 0) throw new Error("garages");
+      setGarages(next);
     } catch {
-      /* optional */
+      if (requestId !== garageRequestRef.current) return;
+      setGarages((current) => current.map(clearGarageLive));
     }
   }, []);
 
@@ -86,11 +96,21 @@ export function EnskeParkApp() {
   }, [loadZones]);
 
   useEffect(() => {
-    const boot = window.setTimeout(() => void loadGarages(), 0);
-    const id = window.setInterval(() => void loadGarages(), 60_000);
+    let interval = 0;
+    const refresh = () => {
+      if (document.visibilityState === "hidden") return;
+      void loadGarages();
+    };
+    const boot = window.setTimeout(refresh, 0);
+    interval = window.setInterval(refresh, 60_000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.clearTimeout(boot);
-      window.clearInterval(id);
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [loadGarages]);
 
