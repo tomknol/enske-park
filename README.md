@@ -1,6 +1,6 @@
 # Enske Park
 
-Mobiele parkeerutility voor Enschede: volledige kaart, live parkeerstatus op basis van je locatie, zone-tarieven, countdown, kosteninschatting, garages en lichte adreszoek.
+Kaart van de parkeerzones in Enschede: zie waar de zones zitten, plus live parkeerstatus op basis van je locatie, tarieven, countdown, kosteninschatting, garages en lichte adreszoek.
 
 **Productie:** [enske-park.vercel.app](https://enske-park.vercel.app)
 

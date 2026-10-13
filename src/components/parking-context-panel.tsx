@@ -461,7 +461,8 @@ function PanelContents(props: ParkingContextPanelProps) {
         <PanelClose onClear={onClearContext} />
         <p className="park-info-title">ENSKE PARK</p>
         <p className="park-info-body">
-          Parkeertarieven en zones voor Enschede. Borden ter plaatse zijn leidend.
+          Parkeerzones en tarieven voor Enschede. Zie waar de zones zitten.
+          Borden ter plaatse zijn leidend.
           Live garagebezetting komt van RDW / Nationaal Parkeerregister en verschijnt
           alleen als de telling recent is.
         </p>
